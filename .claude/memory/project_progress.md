@@ -12,9 +12,7 @@ type: project
 - GitHub 仓库已 push：https://github.com/yuhaoshang157/Multi-agent-code-reviewer
 - 2 个 commit：`file set up` + `day1 set_up`
 
-**Why:** 简历项目 Day 1，目标是跑通环境和第一个 API 调用。
-
-**How to apply:** 下次会话直接从 Day 2 开始（LangChain 基础三个 demo）。
+**下次会话从 Day 2 开始（LangChain 基础三个 demo）。**
 
 ## 关键配置
 
