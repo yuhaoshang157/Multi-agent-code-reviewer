@@ -36,7 +36,7 @@
 
 | 层 | 选择 | 备选（不用） |
 |---|---|---|
-| 主模型 API | Claude Sonnet 4 (`claude-sonnet-4-5`) | GPT-4o（仅做对比实验时调一次）|
+| 主模型 API | Claude 3.5 Sonnet via OpenRouter (`anthropic/claude-3-5-sonnet`) | GPT-4o（仅做对比实验时调一次）|
 | Agent 编排 | **LangGraph** | AutoGen / CrewAI（都不用）|
 | RAG 向量库 | **Milvus** (docker 本地起) | Qdrant / Pinecone（不用）|
 | Embedding | **BGE-M3** | OpenAI ada-002（不用）|
@@ -82,6 +82,16 @@ LangGraph Orchestrator (StateGraph)
 - 作者**先跑通再优化**：先出 MVP，不要过早追求完美
 - 作者**每天需要有 commit**：保持 GitHub 活跃度给 HR 看
 - 作者用中文沟通，但代码注释用英文（国际化，给 IC 老师/面试官也能看）
+
+## 进度记录
+
+### ✅ Week 1 Day 1 (2026-04-17) 已完成
+- 项目目录结构初始化（src/agents/schemas/prompts、scripts、tests、examples、outputs）
+- uv 虚拟环境 + 核心依赖安装（anthropic、langgraph、langchain、pydantic 等）
+- `scripts/hello.py` 用 OpenAI SDK 格式调通 OpenRouter → Claude 3.5 Sonnet
+- pyproject.toml、.gitignore、README.md（含 mermaid 架构图）
+- GitHub 仓库建立并 push：https://github.com/yuhaoshang157/Multi-agent-code-reviewer
+- **注意**：API 走 OpenRouter，模型名用 `anthropic/claude-3-5-sonnet`，非原生 Anthropic SDK
 
 ## 四周里程碑
 
