@@ -56,6 +56,13 @@ LangGraph Orchestrator (StateGraph)
 - pyproject.toml、.gitignore、README.md
 - GitHub 仓库建立并 push
 
+### ✅ Week 1 Day 2 (2026-04-18)
+- 安装 `langchain-openai`，使用 OpenRouter 兼容接口
+- `examples/01_chain.py`：LCEL 管道（ChatPromptTemplate | ChatOpenAI | StrOutputParser）
+- `examples/02_fewshot.py`：FewShotChatMessagePromptTemplate 多轮示例注入
+- `examples/03_structured.py`：Pydantic v2 + with_structured_output 结构化输出
+- 踩坑：Anthropic 不支持 JSON Schema integer 字段的 `ge/le` 约束，去掉即可
+
 ## 里程碑
 
 - **Week 1 (4.17-4.23)**：环境 + 单 Agent 跑通 + GitHub 建仓
