@@ -63,6 +63,10 @@ LangGraph Orchestrator (StateGraph)
 - `examples/03_structured.py`：Pydantic v2 + with_structured_output 结构化输出
 - 踩坑：Anthropic 不支持 JSON Schema integer 字段的 `ge/le` 约束，去掉即可
 
+### ✅ Week 1 Day 3 (2026-04-19)
+- `examples/04_langgraph_basic.py`：LangGraph StateGraph 2-node pipeline（Planner → Reviewer）
+- 核心概念：State / Node / Reducer / add_messages / Builder / compile
+
 ## 里程碑
 
 - **Week 1 (4.17-4.23)**：环境 + 单 Agent 跑通 + GitHub 建仓
