@@ -67,6 +67,11 @@ LangGraph Orchestrator (StateGraph)
 - `examples/04_langgraph_basic.py`：LangGraph StateGraph 2-node pipeline（Planner → Reviewer）
 - 核心概念：State / Node / Reducer / add_messages / Builder / compile
 
+### ✅ Week 1 Day 6 (2026-04-21，提前完成)
+- 安装 PyGithub，`src/tools/github_fetcher.py`：抓取真实 GitHub PR diff
+- `src/tools/review_runner.py`：PR diff → multi-agent Pipeline → 保存 JSON 报告
+- 端到端验证：psf/requests PR #6710 → 评分 6/10，5 个问题，报告存入 `outputs/reviews/`
+
 ### ✅ Week 1 Day 5 (2026-04-21)
 - `src/prompts/templates.py`：改进三节点 system prompt，加 few-shot 示例，全部改为中文输出
 - `src/agents/multi_agent.py`：加 `max_retries=3` / `request_timeout=60` 重试机制
