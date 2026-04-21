@@ -14,5 +14,8 @@ dependencies = [
     "PyGithub>=2.0.0",
 ]
 
+[tool.pytest.ini_options]
+markers = ["integration: requires live API key"]
+
 [tool.ruff]
 line-length = 88

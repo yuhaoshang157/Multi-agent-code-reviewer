@@ -20,6 +20,8 @@ llm = ChatOpenAI(
     model="anthropic/claude-sonnet-4.6",
     openai_api_key=os.environ["ANTHROPIC_API_KEY"],
     openai_api_base="https://openrouter.ai/api/v1",
+    max_retries=3,        # retry on transient API errors (rate limit / 5xx)
+    request_timeout=60,
 )
 
 planner_llm = llm.with_structured_output(PlannerOutput)

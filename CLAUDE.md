@@ -67,6 +67,12 @@ LangGraph Orchestrator (StateGraph)
 - `examples/04_langgraph_basic.py`：LangGraph StateGraph 2-node pipeline（Planner → Reviewer）
 - 核心概念：State / Node / Reducer / add_messages / Builder / compile
 
+### ✅ Week 1 Day 5 (2026-04-21)
+- `src/prompts/templates.py`：改进三节点 system prompt，加 few-shot 示例，全部改为中文输出
+- `src/agents/multi_agent.py`：加 `max_retries=3` / `request_timeout=60` 重试机制
+- `tests/test_multi_agent.py`：新建 pytest 测试（6 个单元测试 + 1 个集成测试）
+- `pyproject.toml`：注册 `integration` 自定义 mark
+
 ### ✅ Week 1 Day 4 (2026-04-20)
 - 跳过单 Agent，直接构建三节点多 Agent Pipeline
 - 建立 `src/` 目录结构：`agents/` / `schemas/` / `prompts/`
