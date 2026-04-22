@@ -1,4 +1,5 @@
 """Demo 1: Simple LLM chain — Prompt → LLM → OutputParser"""
+
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -13,10 +14,15 @@ llm = ChatOpenAI(
     openai_api_base="https://openrouter.ai/api/v1",
 )
 
-prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a concise code reviewer. Identify the main issue in the code."),
-    ("user", "{code}"),
-])
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are a concise code reviewer. Identify the main issue in the code.",
+        ),
+        ("user", "{code}"),
+    ]
+)
 
 chain = prompt | llm | StrOutputParser()
 

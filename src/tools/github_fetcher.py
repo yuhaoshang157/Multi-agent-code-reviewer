@@ -1,4 +1,5 @@
 """Fetch PR diff from GitHub using PyGithub."""
+
 import os
 from dataclasses import dataclass
 from github import Github, Auth
@@ -12,7 +13,7 @@ class PRData:
     repo: str
     pr_number: int
     title: str
-    diff: str           # raw unified diff text
+    diff: str  # raw unified diff text
     changed_files: list[str]
 
 

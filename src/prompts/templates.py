@@ -75,7 +75,4 @@ def reviewer_prompt(code: str, plan_summary: str, aspects: str) -> str:
 
 
 def reporter_prompt(review_json: str) -> str:
-    return (
-        f"根据以下结构化评审数据生成中文 Markdown 报告：\n\n"
-        f"{review_json}"
-    )
+    return f"根据以下结构化评审数据生成中文 Markdown 报告：\n\n{review_json}"

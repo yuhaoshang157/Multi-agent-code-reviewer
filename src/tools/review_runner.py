@@ -1,7 +1,7 @@
 """Run multi-agent review on a real GitHub PR and save results."""
+
 import json
 import os
-from datetime import datetime
 from src.tools.github_fetcher import fetch_pr
 from src.agents.multi_agent import graph
 
@@ -14,12 +14,14 @@ def review_pr(repo_name: str, pr_number: int) -> str:
     print(f"Files: {pr.changed_files}\n")
 
     print("Running multi-agent review pipeline...")
-    result = graph.invoke({
-        "code": pr.diff,
-        "plan": None,
-        "review": None,
-        "report": "",
-    })
+    result = graph.invoke(
+        {
+            "code": pr.diff,
+            "plan": None,
+            "review": None,
+            "report": "",
+        }
+    )
 
     # build output
     output = {

@@ -1,4 +1,5 @@
 """Multi-agent code review pipeline: Planner → Reviewer → Reporter."""
+
 import os
 import json
 from typing import Optional
@@ -10,8 +11,12 @@ from langgraph.graph import StateGraph, START, END
 
 from src.schemas.review import PlannerOutput, ReviewResult
 from src.prompts.templates import (
-    PLANNER_SYSTEM, REVIEWER_SYSTEM, REPORTER_SYSTEM,
-    planner_prompt, reviewer_prompt, reporter_prompt,
+    PLANNER_SYSTEM,
+    REVIEWER_SYSTEM,
+    REPORTER_SYSTEM,
+    planner_prompt,
+    reviewer_prompt,
+    reporter_prompt,
 )
 
 load_dotenv()
@@ -20,7 +25,7 @@ llm = ChatOpenAI(
     model="anthropic/claude-sonnet-4.6",
     openai_api_key=os.environ["ANTHROPIC_API_KEY"],
     openai_api_base="https://openrouter.ai/api/v1",
-    max_retries=3,        # retry on transient API errors (rate limit / 5xx)
+    max_retries=3,  # retry on transient API errors (rate limit / 5xx)
     request_timeout=60,
 )
 
@@ -36,32 +41,38 @@ class ReviewState(TypedDict):
 
 
 def planner_node(state: ReviewState) -> dict:
-    result = planner_llm.invoke([
-        SystemMessage(content=PLANNER_SYSTEM),
-        HumanMessage(content=planner_prompt(state["code"])),
-    ])
+    result = planner_llm.invoke(
+        [
+            SystemMessage(content=PLANNER_SYSTEM),
+            HumanMessage(content=planner_prompt(state["code"])),
+        ]
+    )
     return {"plan": result}
 
 
 def reviewer_node(state: ReviewState) -> dict:
     plan: PlannerOutput = state["plan"]
-    aspects_text = "\n".join(
-        f"- [{a.category}] {a.description}" for a in plan.aspects
+    aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
+    result = reviewer_llm.invoke(
+        [
+            SystemMessage(content=REVIEWER_SYSTEM),
+            HumanMessage(
+                content=reviewer_prompt(state["code"], plan.summary, aspects_text)
+            ),
+        ]
     )
-    result = reviewer_llm.invoke([
-        SystemMessage(content=REVIEWER_SYSTEM),
-        HumanMessage(content=reviewer_prompt(state["code"], plan.summary, aspects_text)),
-    ])
     return {"review": result}
 
 
 def reporter_node(state: ReviewState) -> dict:
     review: ReviewResult = state["review"]
     review_json = json.dumps(review.model_dump(), indent=2)
-    response = llm.invoke([
-        SystemMessage(content=REPORTER_SYSTEM),
-        HumanMessage(content=reporter_prompt(review_json)),
-    ])
+    response = llm.invoke(
+        [
+            SystemMessage(content=REPORTER_SYSTEM),
+            HumanMessage(content=reporter_prompt(review_json)),
+        ]
+    )
     return {"report": response.content}
 
 
@@ -100,7 +111,9 @@ def read_file(path):
 """
 
     print("=== Multi-Agent Code Review Pipeline ===\n")
-    result = graph.invoke({"code": test_code, "plan": None, "review": None, "report": ""})
+    result = graph.invoke(
+        {"code": test_code, "plan": None, "review": None, "report": ""}
+    )
 
     print("[Planner Output]")
     for a in result["plan"].aspects:
@@ -108,7 +121,9 @@ def read_file(path):
 
     print(f"\n[Reviewer Output] Score: {result['review'].overall_score}/10")
     for issue in result["review"].issues:
-        print(f"  [{issue.severity.upper()}] {issue.issue_type} @ {issue.location}: {issue.description}")
+        print(
+            f"  [{issue.severity.upper()}] {issue.issue_type} @ {issue.location}: {issue.description}"
+        )
 
     print("\n[Reporter Output]")
     print(result["report"])

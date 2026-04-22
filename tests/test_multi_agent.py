@@ -1,15 +1,18 @@
 """Tests for multi-agent review pipeline."""
+
 import pytest
-from unittest.mock import patch, MagicMock
 from src.schemas.review import ReviewAspect, PlannerOutput, ReviewIssue, ReviewResult
 from src.prompts.templates import planner_prompt, reviewer_prompt, reporter_prompt
 
 
 # ── Schema tests (no API calls) ──────────────────────────────────────────────
 
+
 def test_planner_output_schema():
     plan = PlannerOutput(
-        aspects=[ReviewAspect(category="security", description="check for hardcoded secrets")],
+        aspects=[
+            ReviewAspect(category="security", description="check for hardcoded secrets")
+        ],
         summary="A simple user lookup function",
     )
     assert len(plan.aspects) == 1
@@ -41,6 +44,7 @@ def test_review_result_empty_issues():
 
 # ── Prompt tests (no API calls) ───────────────────────────────────────────────
 
+
 def test_planner_prompt_contains_code():
     code = "def foo(): pass"
     prompt = planner_prompt(code)
@@ -62,6 +66,7 @@ def test_reporter_prompt_contains_json():
 
 
 # ── Pipeline integration test (live API) ─────────────────────────────────────
+
 
 @pytest.mark.integration
 def test_pipeline_runs_end_to_end():

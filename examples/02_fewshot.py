@@ -1,4 +1,5 @@
 """Demo 2: Few-shot prompt template"""
+
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -24,21 +25,25 @@ examples = [
     },
 ]
 
-example_prompt = ChatPromptTemplate.from_messages([
-    ("human", "Review this code:\n{code}"),
-    ("ai", "{review}"),
-])
+example_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("human", "Review this code:\n{code}"),
+        ("ai", "{review}"),
+    ]
+)
 
 few_shot_prompt = FewShotChatMessagePromptTemplate(
     example_prompt=example_prompt,
     examples=examples,
 )
 
-final_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a Python code reviewer. Give a one-sentence review."),
-    few_shot_prompt,
-    ("human", "Review this code:\n{code}"),
-])
+final_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a Python code reviewer. Give a one-sentence review."),
+        few_shot_prompt,
+        ("human", "Review this code:\n{code}"),
+    ]
+)
 
 chain = final_prompt | llm | StrOutputParser()
 
