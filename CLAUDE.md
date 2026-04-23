@@ -40,13 +40,6 @@ LangGraph Orchestrator (StateGraph)
 - ❌ 前端 UI（Swagger 演示即可）
 - ❌ 100+ PR benchmark（20-30 个）
 
-## 工作方式
-
-- 简洁回答，节省 Token
-- 先跑通再优化
-- 修改现有文件，不新建
-- 代码注释用英文
-
 ## 进度记录
 
 ### ✅ Week 1 Day 1 (2026-04-17)
@@ -87,6 +80,27 @@ LangGraph Orchestrator (StateGraph)
 - 踩坑：OpenRouter 模型 ID 需用小数点格式 `anthropic/claude-sonnet-4.6`，横杠/缺版本号均 404
 - 追加 Karpathy 行为规范到 CLAUDE.md
 
+### ✅ Week 1 Day 7 + Week 2 Day 1 (2026-04-22，提前开始 Week 2)
+- README.md 全面重写：Mermaid 架构图、Quick Start、项目结构、Roadmap
+- ruff format + lint fix：10 个文件格式化，4 个 lint 问题自动修复
+- `docker-compose.yml`：Milvus 完整栈（etcd + MinIO + Milvus），本地 19530 端口
+- 安装 pymilvus（2.6.12）+ FlagEmbedding（BGE-M3）
+- `examples/05_milvus_basic.py`：BGE-M3 embed 代码片段 → 存入 Milvus → 相似度检索跑通
+- 踩坑：`HF_ENDPOINT=https://hf-mirror.com` 对 `.DS_Store` 返回 403，改用官方源即可
+- 验证：查询 f-string SQL 拼接，召回 SQL injection 相似度 0.835 ✅
+
+### ✅ Week 2 Day 2 (2026-04-23，概念复习 + RAG 接入 + 环境整理)
+- 排查 `05_milvus_basic.py` 报错：根因是 PyCharm 运行按钮默认工作目录为脚本所在目录，相对路径 `models/bge-m3` 失效
+- 修复：用 `Path(__file__).parent.parent` 构造绝对路径，不再依赖工作目录
+- 修复：insert 后补加 `client.flush(COLLECTION)`，解决 Growing Segment 未刷写导致 search 返回空的问题
+- 深化理解：Docker 容器化原理、Milvus 三组件职责、稠密向量 vs 稀疏向量本质区别、BGE-M3 双输出头、flush 分层存储逻辑
+- `src/tools/rag_store.py`：25 条种子 bug 模式（SQL注入/资源泄漏/命令注入等）+ BGE-M3 embed + Milvus 存取封装
+- `src/tools/code_chunker.py`：tree-sitter 解析 Python AST，按函数/类切 chunk
+- Reviewer Agent 接入 RAG：每个 chunk 查 Milvus → 召回历史 bug → 注入 reviewer prompt
+- 端到端验证：3 函数代码 → RAG 召回 → 评分 3/10，5 个问题全部命中 ✅
+- 整理记忆系统：新建全局记忆（`~/.claude/memory/`）+ 项目记忆精简至 4 个文件
+- 删除 conda env `multi-agent-code-reviewer`（包已全部在 `.venv`）
+
 ## 里程碑
 
 - **Week 1 (4.17-4.23)**：环境 + 单 Agent 跑通 + GitHub 建仓
@@ -97,68 +111,3 @@ LangGraph Orchestrator (StateGraph)
 
 请先回复"了解，继续上次进度"然后执行用户的新指令。不要重新解释架构，除非用户问。
 
-# CLAUDE.md
-
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-## 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

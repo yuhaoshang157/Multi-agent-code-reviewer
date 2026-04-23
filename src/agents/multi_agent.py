@@ -18,6 +18,8 @@ from src.prompts.templates import (
     reviewer_prompt,
     reporter_prompt,
 )
+from src.tools.code_chunker import chunk_python_code
+from src.tools.rag_store import query_similar_bugs
 
 load_dotenv()
 
@@ -53,11 +55,23 @@ def planner_node(state: ReviewState) -> dict:
 def reviewer_node(state: ReviewState) -> dict:
     plan: PlannerOutput = state["plan"]
     aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
+
+    # RAG: chunk code, query each chunk, deduplicate hits
+    rag_lines = []
+    seen_labels = set()
+    for chunk in chunk_python_code(state["code"]):
+        for hit in query_similar_bugs(chunk["code"], top_k=2):
+            key = hit["label"] + hit["comment"]
+            if key not in seen_labels:
+                seen_labels.add(key)
+                rag_lines.append(f"- [{hit['similarity']}] {hit['label']}: {hit['comment']}")
+    rag_context = "\n".join(rag_lines)
+
     result = reviewer_llm.invoke(
         [
             SystemMessage(content=REVIEWER_SYSTEM),
             HumanMessage(
-                content=reviewer_prompt(state["code"], plan.summary, aspects_text)
+                content=reviewer_prompt(state["code"], plan.summary, aspects_text, rag_context)
             ),
         ]
     )

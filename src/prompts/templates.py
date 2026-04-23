@@ -65,11 +65,13 @@ def planner_prompt(code: str) -> str:
     return f"分析以下 Python 代码并制定评审计划：\n\n```python\n{code}\n```"
 
 
-def reviewer_prompt(code: str, plan_summary: str, aspects: str) -> str:
+def reviewer_prompt(code: str, plan_summary: str, aspects: str, rag_context: str = "") -> str:
+    rag_section = f"\n\n历史相似问题（RAG 召回，供参考）：\n{rag_context}" if rag_context else ""
     return (
         f"根据以下检查清单对代码进行评审。\n\n"
         f"代码概述：{plan_summary}\n\n"
-        f"评审清单：\n{aspects}\n\n"
+        f"评审清单：\n{aspects}"
+        f"{rag_section}\n\n"
         f"代码：\n```python\n{code}\n```"
     )
 

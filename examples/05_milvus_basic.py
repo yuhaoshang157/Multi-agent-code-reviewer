@@ -1,10 +1,13 @@
 """Day 1: Milvus + BGE-M3 basic demo — embed code → store → query."""
+from pathlib import Path
 from pymilvus import MilvusClient
 from FlagEmbedding import BGEM3FlagModel
 
+PROJECT_ROOT = Path(__file__).parent.parent
+
 # --- 1. Load BGE-M3 (downloads model on first run, ~2GB) ---
 print("Loading BGE-M3 model...")
-embedder = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+embedder = BGEM3FlagModel(str(PROJECT_ROOT / "models" / "bge-m3"), use_fp16=True)
 
 # --- 2. Embed sample code snippets ---
 code_snippets = [
@@ -48,6 +51,7 @@ data = [
     for i in range(len(code_snippets))
 ]
 client.insert(collection_name=COLLECTION, data=data)
+client.flush(COLLECTION)  # ensure data is committed before search
 print(f"Inserted {len(data)} records.")
 
 # --- 5. Query: find issues similar to a new code snippet ---
