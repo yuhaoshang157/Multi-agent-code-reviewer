@@ -101,6 +101,30 @@ LangGraph Orchestrator (StateGraph)
 - 整理记忆系统：新建全局记忆（`~/.claude/memory/`）+ 项目记忆精简至 4 个文件
 - 删除 conda env `multi-agent-code-reviewer`（包已全部在 `.venv`）
 
+### ✅ Week 2 Day 3 (2026-04-24，代码复习日)
+- 逐行审阅昨天新写的 4 个文件：`rag_store.py` / `code_chunker.py` / `multi_agent.py` / `templates.py`
+- 深化理解：tree-sitter 为何接受 bytes（C 库用字节偏移，多字节字符必须字节切片）
+- 明确 RAG 注入内容：只注入 label + comment，不注入种子 code（避免 LLM 混淆被审代码）
+- 发现 `chunk_diff` 函数已定义但全项目无调用点，预留给后续 review_runner.py 接入
+- 理清 PlannerOutput 两字段区别：`summary`（一句话描述）vs `aspects`（3-5 个具体检查点）
+- 理解 `COLLECTION` 是模块级常量，函数内直接引用全局变量，非函数参数
+- 明确 Milvus seed 数据持久化规则：`docker compose down` 不删 Volume，`-v` 才删
+
+### ✅ Week 2 Day 4-5 (2026-04-25~26，FastAPI 网关 + 代码复习)
+- `src/agents/multi_agent.py`：RAG 切块从 `chunk_python_code` 改为 `chunk_diff or chunk_python_code`，支持 PR diff 和纯 Python 两种输入
+- `src/tools/review_runner.py`：返回值从文件名改为 `output` 字典，供 FastAPI 直接使用
+- `src/api/main.py`：新建 FastAPI 网关，`POST /review` + `GET /health`，Swagger UI 可视化测试
+- `pyproject.toml`：补全缺失依赖（pymilvus / FlagEmbedding / tree-sitter / langchain-openai）
+- 踩坑：删除 conda env 导致 `.venv` Python 基础断裂，用 `uv python install 3.12` 重建独立 Python 解决
+- 深化理解：GET vs POST 区别、Swagger UI 用途、FastAPI 自动解析 Pydantic 模型、变量类型标注语法
+
+### ✅ Week 2 Day 6 (2026-04-27，Docker 容器化 + 代码复习)
+- `Dockerfile`：基于 python:3.12-slim，分层构建（依赖层 + 代码层），EXPOSE 8000
+- `.dockerignore`：排除 models/、.venv/、outputs/、.env、__pycache__
+- `docker-compose.yml`：新增 api 服务，挂载 models/ 和 outputs/，depends_on milvus healthy
+- `src/tools/rag_store.py`：`MILVUS_URI` 改为读环境变量，本地默认 localhost，容器内用 milvus:19530
+- 验证：`docker compose up api -d` 启动成功，`GET /health` 返回 200 ✅
+
 ## 里程碑
 
 - **Week 1 (4.17-4.23)**：环境 + 单 Agent 跑通 + GitHub 建仓

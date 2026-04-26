@@ -42,7 +42,7 @@ def review_pr(repo_name: str, pr_number: int) -> str:
 
     print(f"Score: {output['review_score']}/10 | Issues: {output['issues_count']}")
     print(f"Report saved to: {filename}")
-    return filename
+    return output
 
 
 if __name__ == "__main__":

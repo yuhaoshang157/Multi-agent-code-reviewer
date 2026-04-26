@@ -1,11 +1,12 @@
 """RAG knowledge base: seed bug patterns + embed + Milvus store/query."""
+import os
 from pathlib import Path
 from pymilvus import MilvusClient
 from FlagEmbedding import BGEM3FlagModel
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MODEL_PATH = str(PROJECT_ROOT / "models" / "bge-m3")
-MILVUS_URI = "http://localhost:19530"
+MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
 COLLECTION = "bug_patterns"
 DIMENSION = 1024
 

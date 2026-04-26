@@ -12,6 +12,11 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "PyGithub>=2.0.0",
+    "langchain-openai>=0.2.0",
+    "pymilvus>=2.4.0",
+    "FlagEmbedding>=1.2.0",
+    "tree-sitter>=0.23.0",
+    "tree-sitter-python>=0.23.0",
 ]
 
 [tool.pytest.ini_options]

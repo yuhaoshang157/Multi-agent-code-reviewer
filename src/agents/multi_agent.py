@@ -18,7 +18,7 @@ from src.prompts.templates import (
     reviewer_prompt,
     reporter_prompt,
 )
-from src.tools.code_chunker import chunk_python_code
+from src.tools.code_chunker import chunk_python_code, chunk_diff
 from src.tools.rag_store import query_similar_bugs
 
 load_dotenv()
@@ -57,9 +57,10 @@ def reviewer_node(state: ReviewState) -> dict:
     aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
 
     # RAG: chunk code, query each chunk, deduplicate hits
+    # chunk_diff handles PR diff format (+/- lines); falls back to chunk_python_code for plain code
     rag_lines = []
     seen_labels = set()
-    for chunk in chunk_python_code(state["code"]):
+    for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
         for hit in query_similar_bugs(chunk["code"], top_k=2):
             key = hit["label"] + hit["comment"]
             if key not in seen_labels:
