@@ -125,11 +125,19 @@ LangGraph Orchestrator (StateGraph)
 - `src/tools/rag_store.py`：`MILVUS_URI` 改为读环境变量，本地默认 localhost，容器内用 milvus:19530
 - 验证：`docker compose up api -d` 启动成功，`GET /health` 返回 200 ✅
 
+### ✅ Week 2 Day 7 (2026-04-29，Benchmark + Token 追踪 + README 更新)
+- `src/tools/token_tracker.py`：LangChain BaseCallbackHandler，跨三节点累计 token 用量，估算 OpenRouter 费用
+- `src/tools/review_runner.py`：接入 TokenUsageCallback，output dict 新增 `token_usage` 字段
+- `src/benchmark.py`：从 `scripts/` 移入 `src/`，属于系统核心组件；支持断点续跑（load_existing_results）、逐 PR 写盘、按 repo 汇总
+- Benchmark 执行完成：6 个 Python 仓库 × 4 PR = 23/24 PR（1 个超时跳过），平均分 6.2/10，耗时 ~37 min
+- Docker 镜像重建：`docker compose build api`，容器含最新 token_tracker，成本追踪生效
+- README 全面更新：加入 benchmark 结果表、API 示例（含 token_usage）、完整项目结构、Quick Start 双模式
+
 ## 里程碑
 
-- **Week 1 (4.17-4.23)**：环境 + 单 Agent 跑通 + GitHub 建仓
-- **Week 2 (4.24-4.30)**：Multi-Agent + RAG 接入
-- **Week 3 (5.01-5.07)**：FastAPI + Docker + benchmark + demo
+- **Week 1 (4.17-4.23)**：环境 + 单 Agent 跑通 + GitHub 建仓 ✅
+- **Week 2 (4.24-4.30)**：Multi-Agent + RAG 接入 + FastAPI + Docker ✅（提前完成）
+- **Week 3 (5.01-5.07)**：Benchmark（23 PR，6.2/10）+ Token 追踪 + Demo 视频 🚧
 
 ## 每次会话开始时
 

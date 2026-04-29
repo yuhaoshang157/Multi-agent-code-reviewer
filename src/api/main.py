@@ -25,6 +25,7 @@ class ReviewResponse(BaseModel):
     review_score: int
     issues_count: int
     report: str
+    token_usage: dict
 
 
 @app.get("/health")

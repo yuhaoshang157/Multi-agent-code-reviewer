@@ -4,6 +4,7 @@ import json
 import os
 from src.tools.github_fetcher import fetch_pr
 from src.agents.multi_agent import graph
+from src.tools.token_tracker import TokenUsageCallback
 
 
 def review_pr(repo_name: str, pr_number: int) -> str:
@@ -14,13 +15,10 @@ def review_pr(repo_name: str, pr_number: int) -> str:
     print(f"Files: {pr.changed_files}\n")
 
     print("Running multi-agent review pipeline...")
+    tracker = TokenUsageCallback()
     result = graph.invoke(
-        {
-            "code": pr.diff,
-            "plan": None,
-            "review": None,
-            "report": "",
-        }
+        {"code": pr.diff, "plan": None, "review": None, "report": ""},
+        config={"callbacks": [tracker]},
     )
 
     # build output
@@ -32,6 +30,7 @@ def review_pr(repo_name: str, pr_number: int) -> str:
         "review_score": result["review"].overall_score,
         "issues_count": len(result["review"].issues),
         "report": result["report"],
+        "token_usage": tracker.summary(),
     }
 
     # save to outputs/reviews/
