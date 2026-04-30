@@ -11,3 +11,4 @@ dist/
 outputs/
 .idea/
 models/
+/data/

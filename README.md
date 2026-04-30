@@ -153,4 +153,3 @@ python -m pytest tests/ -v
 - [x] **Week 1** — LangChain basics, LangGraph 3-node pipeline, GitHub PR fetcher, end-to-end demo
 - [x] **Week 2** — Milvus RAG + BGE-M3 embedding + tree-sitter AST chunking, FastAPI gateway, Docker Compose
 - [x] **Week 3** — Token usage tracking, 23-PR benchmark across 6 repos, Docker rebuild
-- [ ] Demo video

@@ -1,4 +1,5 @@
-"""RAG knowledge base: seed bug patterns + embed + Milvus store/query."""
+"""RAG knowledge base: ingest code-review dataset into Milvus, query by code similarity."""
+import json
 import os
 from pathlib import Path
 from pymilvus import MilvusClient
@@ -7,140 +8,13 @@ from FlagEmbedding import BGEM3FlagModel
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 MODEL_PATH = str(PROJECT_ROOT / "models" / "bge-m3")
 MILVUS_URI = os.environ.get("MILVUS_URI", "http://localhost:19530")
-COLLECTION = "bug_patterns"
+COLLECTION = "code_review_rag"
 DIMENSION = 1024
 
-# ---------------------------------------------------------------------------
-# Seed data: known bug patterns (code, label, comment)
-# ---------------------------------------------------------------------------
-SEED_BUGS = [
-    {
-        "code": "query = f'SELECT * FROM users WHERE id = {user_id}'\ndb.execute(query)",
-        "label": "SQL injection",
-        "comment": "f-string or %-format SQL is injectable; use parameterized queries instead.",
-    },
-    {
-        "code": "query = 'SELECT * FROM orders WHERE name = ' + name\ndb.execute(query)",
-        "label": "SQL injection",
-        "comment": "String concatenation in SQL is injectable.",
-    },
-    {
-        "code": "f = open(path)\ndata = f.read()\nreturn data",
-        "label": "Resource leak",
-        "comment": "File handle never closed; use 'with open(path) as f' instead.",
-    },
-    {
-        "code": "conn = psycopg2.connect(dsn)\ncursor = conn.cursor()\ncursor.execute(sql)",
-        "label": "Resource leak",
-        "comment": "DB connection never closed; wrap in try/finally or context manager.",
-    },
-    {
-        "code": "result = []\nfor item in items:\n    result = result + [item]",
-        "label": "O(n^2) performance",
-        "comment": "List concatenation in loop is O(n^2); use result.append(item) instead.",
-    },
-    {
-        "code": "def is_palindrome(s):\n    return s == s[::-1]",
-        "label": "Good practice",
-        "comment": "Clean and correct palindrome check.",
-    },
-    {
-        "code": "PASSWORD = 'admin123'\nSECRET_KEY = 'hardcoded-secret'",
-        "label": "Hardcoded secret",
-        "comment": "Credentials hardcoded in source; use environment variables.",
-    },
-    {
-        "code": "token = 'ghp_abc123realtoken'\nheaders = {'Authorization': f'Bearer {token}'}",
-        "label": "Hardcoded secret",
-        "comment": "API token hardcoded; load from os.environ instead.",
-    },
-    {
-        "code": "def hash_password(pwd):\n    return pwd",
-        "label": "Plaintext password",
-        "comment": "Password stored as plaintext; use bcrypt or argon2.",
-    },
-    {
-        "code": "def hash_password(pwd):\n    return hashlib.md5(pwd.encode()).hexdigest()",
-        "label": "Weak hash",
-        "comment": "MD5 is broken for passwords; use bcrypt/argon2.",
-    },
-    {
-        "code": "except Exception:\n    pass",
-        "label": "Silent exception",
-        "comment": "Swallowing exceptions hides bugs; at minimum log the error.",
-    },
-    {
-        "code": "except:\n    pass",
-        "label": "Silent exception",
-        "comment": "Bare except catches even KeyboardInterrupt; always specify exception type.",
-    },
-    {
-        "code": "eval(user_input)",
-        "label": "Code injection",
-        "comment": "eval() on user input allows arbitrary code execution.",
-    },
-    {
-        "code": "os.system(f'ls {user_path}')",
-        "label": "Command injection",
-        "comment": "Shell injection via unsanitized input; use subprocess with list args.",
-    },
-    {
-        "code": "subprocess.run(f'git clone {url}', shell=True)",
-        "label": "Command injection",
-        "comment": "shell=True with f-string is injectable; pass args as list.",
-    },
-    {
-        "code": "time.sleep(5)\nresult = fetch_data()",
-        "label": "Arbitrary sleep",
-        "comment": "Fixed sleep is fragile; use retry with backoff or event-based waiting.",
-    },
-    {
-        "code": "def get_items(lst=[]):\n    lst.append(1)\n    return lst",
-        "label": "Mutable default argument",
-        "comment": "Mutable default is shared across calls; use None and initialize inside.",
-    },
-    {
-        "code": "import pickle\nobj = pickle.loads(user_data)",
-        "label": "Unsafe deserialization",
-        "comment": "pickle.loads on untrusted data allows RCE; use JSON or validate source.",
-    },
-    {
-        "code": "assert user_id > 0, 'invalid id'",
-        "label": "Assert for validation",
-        "comment": "assert is stripped with -O flag; use if/raise for input validation.",
-    },
-    {
-        "code": "SELECT * FROM users",
-        "label": "SELECT *",
-        "comment": "SELECT * fetches all columns; specify needed columns for performance.",
-    },
-    {
-        "code": "for i in range(len(items)):\n    print(items[i])",
-        "label": "Non-idiomatic loop",
-        "comment": "Use 'for item in items' or enumerate(); range(len()) is unpythonic.",
-    },
-    {
-        "code": "if type(x) == int:",
-        "label": "Type check anti-pattern",
-        "comment": "Use isinstance(x, int); type() breaks with subclasses.",
-    },
-    {
-        "code": "requests.get(url, verify=False)",
-        "label": "TLS verification disabled",
-        "comment": "verify=False disables certificate checking; man-in-the-middle risk.",
-    },
-    {
-        "code": "def safe_query(db, user_id):\n    return db.execute('SELECT * FROM users WHERE id = ?', (user_id,))",
-        "label": "Good practice",
-        "comment": "Parameterized query correctly prevents SQL injection.",
-    },
-    {
-        "code": "with open(path) as f:\n    return f.read()",
-        "label": "Good practice",
-        "comment": "Context manager ensures file is closed even on exception.",
-    },
-]
-
+EMBED_BATCH_SIZE = 64
+INSERT_BATCH_SIZE = 1000
+RAG_KB_PATH = str(PROJECT_ROOT / "data" / "rag_kb.jsonl")           # full 73K
+SAMPLED_RAG_KB_PATH = str(PROJECT_ROOT / "data" / "rag_kb_5k.jsonl")  # stratified ~4K sample
 
 # ---------------------------------------------------------------------------
 # Core functions
@@ -153,7 +27,7 @@ _client: MilvusClient | None = None
 def _get_embedder() -> BGEM3FlagModel:
     global _embedder
     if _embedder is None:
-        _embedder = BGEM3FlagModel(MODEL_PATH, use_fp16=True)
+        _embedder = BGEM3FlagModel(MODEL_PATH, use_fp16=True, device="cuda")
     return _embedder
 
 
@@ -165,61 +39,163 @@ def _get_client() -> MilvusClient:
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    return _get_embedder().encode(texts, batch_size=16, max_length=512)["dense_vecs"].tolist()
+    return _get_embedder().encode(texts, batch_size=32, max_length=512)["dense_vecs"].tolist()
 
 
-def init_knowledge_base(force_reinit: bool = False) -> None:
-    """Embed seed bugs and store in Milvus. Skip if collection already exists."""
+def _count_collection() -> int:
+    try:
+        stats = _get_client().get_collection_stats(collection_name=COLLECTION)
+        return stats.get("row_count", 0)
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Ingestion
+# ---------------------------------------------------------------------------
+
+def init_rag_from_dataset(
+    jsonl_path: str = RAG_KB_PATH,
+    force_reinit: bool = False,
+) -> None:
+    """Stream rag_kb.jsonl, embed code fields with BGE-M3, insert into Milvus.
+
+    Only ingests items with ``split == "rag"`` (eval items are excluded).
+    Batches embeddings for GPU efficiency and inserts in sub-batches to
+    avoid overwhelming the Milvus server.
+    """
     client = _get_client()
+
     if client.has_collection(COLLECTION):
         if not force_reinit:
-            print(f"[RAG] Collection '{COLLECTION}' already exists, skipping init.")
+            n = _count_collection()
+            print(f"[RAG] Collection '{COLLECTION}' already exists ({n} items), skipping ingest.")
+            print(f"      Set force_reinit=True to re-ingest from scratch.")
             return
         client.drop_collection(COLLECTION)
+        print(f"[RAG] Dropped existing '{COLLECTION}' collection.")
 
-    client.create_collection(collection_name=COLLECTION, dimension=DIMENSION, metric_type="COSINE")
+    client.create_collection(
+        collection_name=COLLECTION,
+        dimension=DIMENSION,
+        metric_type="COSINE",
+    )
+    print(f"[RAG] Created collection '{COLLECTION}' (dim={DIMENSION}, metric=COSINE).")
 
-    texts = [f"{b['label']}: {b['code']}" for b in SEED_BUGS]
+    # Stream JSONL, accumulate batches
+    batch_texts: list[str] = []
+    batch_records: list[dict] = []
+    total = 0
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            item = json.loads(line)
+            if item.get("split") != "rag":
+                continue
+
+            batch_texts.append(item["code"])
+            batch_records.append(item)
+
+            if len(batch_texts) >= EMBED_BATCH_SIZE:
+                _ingest_batch(client, batch_texts, batch_records, total)
+                total += len(batch_texts)
+                batch_texts.clear()
+                batch_records.clear()
+
+    # Final partial batch
+    if batch_texts:
+        _ingest_batch(client, batch_texts, batch_records, total)
+        total += len(batch_texts)
+
+    client.flush(COLLECTION)
+    print(f"\n[RAG] Ingest complete: {total} items in '{COLLECTION}'.")
+
+
+def _ingest_batch(
+    client: MilvusClient,
+    texts: list[str],
+    records: list[dict],
+    offset: int,
+) -> None:
+    """Embed a batch, then insert into Milvus in sub-batches."""
     vectors = _embed(texts)
 
-    data = [
-        {"id": i, "vector": vectors[i], "label": SEED_BUGS[i]["label"], "comment": SEED_BUGS[i]["comment"], "code": SEED_BUGS[i]["code"]}
-        for i in range(len(SEED_BUGS))
-    ]
-    client.insert(collection_name=COLLECTION, data=data)
-    client.flush(COLLECTION)
-    print(f"[RAG] Initialized '{COLLECTION}' with {len(data)} bug patterns.")
+    insert_data: list[dict] = []
+    for i, (vec, rec) in enumerate(zip(vectors, records)):
+        insert_data.append({
+            "id": offset + i,
+            "vector": vec,
+            "source": rec.get("source", ""),
+            "code": rec.get("code", "")[:8000],
+            "review": rec.get("review", "")[:2000],
+            "language": rec.get("language", "unknown"),
+        })
 
+        if len(insert_data) >= INSERT_BATCH_SIZE:
+            client.insert(collection_name=COLLECTION, data=insert_data)
+            insert_data.clear()
+
+    if insert_data:
+        client.insert(collection_name=COLLECTION, data=insert_data)
+
+    print(f"[RAG] Embedded {offset + len(texts)} items...", end="\r")
+
+
+# ---------------------------------------------------------------------------
+# Query
+# ---------------------------------------------------------------------------
 
 def query_similar_bugs(code_chunk: str, top_k: int = 3) -> list[dict]:
-    """Return top-k similar bug patterns for a given code chunk."""
+    """Return top-k similar code-review examples for a code chunk.
+
+    Returns list of dicts with: similarity, source, review, code, language.
+    Auto-ingests from rag_kb.jsonl if the collection doesn't exist yet.
+    """
     client = _get_client()
+
     if not client.has_collection(COLLECTION):
-        init_knowledge_base()
+        print(f"[RAG] Collection '{COLLECTION}' not found. Auto-ingesting...")
+        init_rag_from_dataset()
 
     vec = _embed([code_chunk])
     results = client.search(
         collection_name=COLLECTION,
         data=vec,
         limit=top_k,
-        output_fields=["label", "comment", "code"],
+        output_fields=["source", "review", "code", "language"],
     )
     return [
         {
             "similarity": round(hit["distance"], 3),
-            "label": hit["entity"]["label"],
-            "comment": hit["entity"]["comment"],
-            "code": hit["entity"]["code"],
+            "source": hit["entity"].get("source", "unknown"),
+            "review": hit["entity"].get("review", ""),
+            "code": hit["entity"].get("code", ""),
+            "language": hit["entity"].get("language", "unknown"),
         }
         for hit in results[0]
     ]
 
 
-if __name__ == "__main__":
-    init_knowledge_base(force_reinit=True)
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
-    test_code = "sql = f'DELETE FROM logs WHERE user={uid}'\ndb.execute(sql)"
-    hits = query_similar_bugs(test_code, top_k=3)
-    print(f"\nQuery: {test_code}\nTop-3 similar bugs:")
-    for h in hits:
-        print(f"  [{h['similarity']}] {h['label']}: {h['comment']}")
+if __name__ == "__main__":
+    import sys
+
+    if "--ingest" in sys.argv:
+        force = "--force" in sys.argv
+        init_rag_from_dataset(force_reinit=force)
+    else:
+        print("Usage:  python -m src.tools.rag_store --ingest [--force]")
+        print("        python -m src.tools.rag_store  (quick query demo)\n")
+
+        if _get_client().has_collection(COLLECTION):
+            test_code = "sql = f'DELETE FROM logs WHERE user={uid}'\ndb.execute(sql)"
+            hits = query_similar_bugs(test_code, top_k=3)
+            print(f"Query: `{test_code}`\n\nTop-3 similar reviews:")
+            for h in hits:
+                review_preview = h["review"][:150].replace("\n", " ")
+                print(f"  [{h['similarity']}] [{h['source']}/{h['language']}] {review_preview}...")
+        else:
+            print("No collection found. Run with --ingest first.")

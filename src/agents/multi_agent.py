@@ -56,16 +56,17 @@ def reviewer_node(state: ReviewState) -> dict:
     plan: PlannerOutput = state["plan"]
     aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
 
-    # RAG: chunk code, query each chunk, deduplicate hits
-    # chunk_diff handles PR diff format (+/- lines); falls back to chunk_python_code for plain code
+    # RAG: chunk code, query each chunk, deduplicate by source + review prefix
     rag_lines = []
-    seen_labels = set()
+    seen_reviews = set()
     for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
         for hit in query_similar_bugs(chunk["code"], top_k=2):
-            key = hit["label"] + hit["comment"]
-            if key not in seen_labels:
-                seen_labels.add(key)
-                rag_lines.append(f"- [{hit['similarity']}] {hit['label']}: {hit['comment']}")
+            dedup_key = f"{hit['source']}:{hit['review'][:200]}"
+            if dedup_key not in seen_reviews:
+                seen_reviews.add(dedup_key)
+                rag_lines.append(
+                    f"- [{hit['similarity']}] [{hit['source']}/{hit['language']}] {hit['review']}"
+                )
     rag_context = "\n".join(rag_lines)
 
     result = reviewer_llm.invoke(
