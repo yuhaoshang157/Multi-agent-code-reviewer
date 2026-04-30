@@ -1,5 +1,6 @@
 .env
 CLAUDE.local.md
+docs/LEARNING_LOG.md
 .venv/
 __pycache__/
 *.pyc
