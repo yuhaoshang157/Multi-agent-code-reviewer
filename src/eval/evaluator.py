@@ -31,12 +31,12 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
 # Core runner
 # ---------------------------------------------------------------------------
 
-def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION) -> dict:
+def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION, model: str = "claude") -> dict:
     """Run the review pipeline and return review_text, score, issues_count."""
     tracker = TokenUsageCallback()
     result = graph.invoke(
         {"code": code, "plan": None, "review": None, "report": "",
-         "use_rag": use_rag, "rag_collection": collection},
+         "use_rag": use_rag, "rag_collection": collection, "model": model},
         config={"callbacks": [tracker]},
     )
     return {

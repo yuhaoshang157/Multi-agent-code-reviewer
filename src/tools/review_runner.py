@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 _REVIEWS_DIR = Path(__file__).parent.parent.parent / "outputs" / "reviews"
 
 
-def review_pr(repo_name: str, pr_number: int) -> dict:
+def review_pr(repo_name: str, pr_number: int, model: str = "claude") -> dict:
     """Fetch PR, run multi-agent review, save report to outputs/reviews/."""
     log.info("Fetching PR #%d from %s...", pr_number, repo_name)
     pr = fetch_pr(repo_name, pr_number)
@@ -24,7 +24,7 @@ def review_pr(repo_name: str, pr_number: int) -> dict:
     tracker = TokenUsageCallback()
     result = graph.invoke(
         {"code": pr.diff, "plan": None, "review": None, "report": "",
-         "use_rag": True, "rag_collection": DEFAULT_COLLECTION},
+         "use_rag": True, "rag_collection": DEFAULT_COLLECTION, "model": model},
         config={"callbacks": [tracker]},
     )
 

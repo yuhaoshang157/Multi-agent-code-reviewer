@@ -7,7 +7,7 @@
 
 | 层 | 选择 |
 |---|---|
-| 主模型 API | Claude Sonnet 4.6 via OpenRouter (`anthropic/claude-sonnet-4.6`) |
+| 主模型 API | DeepSeek V4 Pro（默认）/ Claude Sonnet 4.6 / DeepSeek V4 Flash，通过 `model` 字段切换 |
 | Agent 编排 | LangGraph |
 | RAG 向量库 | Milvus (docker 本地起) |
 | Embedding | BGE-M3 |

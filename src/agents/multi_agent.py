@@ -23,18 +23,40 @@ from src.tools.rag_store import query_similar_bugs, COLLECTION as DEFAULT_COLLEC
 
 load_dotenv()
 
-llm = ChatOpenAI(
-    model="anthropic/claude-sonnet-4.6",
-    openai_api_key=os.environ["ANTHROPIC_API_KEY"],
-    openai_api_base="https://openrouter.ai/api/v1",
-    max_retries=3,  # retry on transient API errors (rate limit / 5xx)
-    request_timeout=60,
-)
-
-planner_llm = llm.with_structured_output(PlannerOutput)
-reviewer_llm = llm.with_structured_output(ReviewResult)
+# ---------------------------------------------------------------------------
+# LLM registry — pre-instantiate all supported models at module load time.
+# Nodes select from this registry at runtime via state["model"].
+# ---------------------------------------------------------------------------
+_LLM_REGISTRY: dict[str, ChatOpenAI] = {
+    "claude": ChatOpenAI(
+        model="anthropic/claude-sonnet-4.6",
+        openai_api_key=os.environ["ANTHROPIC_API_KEY"],
+        openai_api_base="https://openrouter.ai/api/v1",
+        max_retries=3,
+        request_timeout=60,
+    ),
+    "deepseek-pro": ChatOpenAI(
+        model=os.environ.get("DEEPSEEK_V4_Pro_MODEL", "deepseek-v4-pro"),
+        openai_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+        openai_api_base=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        max_retries=3,
+        request_timeout=60,
+    ),
+    "deepseek-flash": ChatOpenAI(
+        model=os.environ.get("DEEPSEEK_V4_Flash_MODEL", "deepseek-v4-flash"),
+        openai_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+        openai_api_base=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        max_retries=3,
+        request_timeout=60,
+    ),
+}
 
 MAX_RAG_RESULTS = 5  # cap total RAG hits injected into prompt to control token cost
+
+
+def _get_llm(state: "ReviewState") -> ChatOpenAI:
+    """Return the base LLM for the current run, falling back to claude."""
+    return _LLM_REGISTRY.get(state.get("model", "deepseek-pro"), _LLM_REGISTRY["deepseek-pro"])
 
 
 class ReviewState(TypedDict):
@@ -44,10 +66,12 @@ class ReviewState(TypedDict):
     report: str
     use_rag: bool       # set False to skip RAG retrieval (used in ablation experiments)
     rag_collection: str  # Milvus collection name; supports exp2/exp3 multi-collection runs
+    model: str          # LLM provider: "claude" | "deepseek-pro" | "deepseek-flash"
 
 
 def planner_node(state: ReviewState) -> dict:
-    result = planner_llm.invoke(
+    llm = _get_llm(state)
+    result = llm.with_structured_output(PlannerOutput).invoke(
         [
             SystemMessage(content=PLANNER_SYSTEM),
             HumanMessage(content=planner_prompt(state["code"])),
@@ -80,7 +104,8 @@ def reviewer_node(state: ReviewState) -> dict:
                     )
         rag_context = "\n".join(rag_lines)
 
-    result = reviewer_llm.invoke(
+    llm = _get_llm(state)
+    result = llm.with_structured_output(ReviewResult).invoke(
         [
             SystemMessage(content=REVIEWER_SYSTEM),
             HumanMessage(
@@ -94,6 +119,7 @@ def reviewer_node(state: ReviewState) -> dict:
 def reporter_node(state: ReviewState) -> dict:
     review: ReviewResult = state["review"]
     review_json = json.dumps(review.model_dump(), indent=2)
+    llm = _get_llm(state)
     response = llm.invoke(
         [
             SystemMessage(content=REPORTER_SYSTEM),
@@ -140,7 +166,7 @@ def read_file(path):
     print("=== Multi-Agent Code Review Pipeline ===\n")
     result = graph.invoke(
         {"code": test_code, "plan": None, "review": None, "report": "",
-         "use_rag": True, "rag_collection": DEFAULT_COLLECTION}
+         "use_rag": True, "rag_collection": DEFAULT_COLLECTION, "model": "claude"}
     )
 
     print("[Planner Output]")
