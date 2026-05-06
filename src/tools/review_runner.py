@@ -1,26 +1,30 @@
 """Run multi-agent review on a real GitHub PR and save results."""
 
 import json
+import logging
 from pathlib import Path
 
 from src.tools.github_fetcher import fetch_pr
 from src.agents.multi_agent import graph
+from src.tools.rag_store import COLLECTION as DEFAULT_COLLECTION
 from src.tools.token_tracker import TokenUsageCallback
+
+log = logging.getLogger(__name__)
 
 _REVIEWS_DIR = Path(__file__).parent.parent.parent / "outputs" / "reviews"
 
 
 def review_pr(repo_name: str, pr_number: int) -> dict:
     """Fetch PR, run multi-agent review, save report to outputs/reviews/."""
-    print(f"Fetching PR #{pr_number} from {repo_name}...")
+    log.info("Fetching PR #%d from %s...", pr_number, repo_name)
     pr = fetch_pr(repo_name, pr_number)
-    print(f"Title: {pr.title}")
-    print(f"Files: {pr.changed_files}\n")
+    log.info("Title: %s | Files: %s", pr.title, len(pr.changed_files))
 
-    print("Running multi-agent review pipeline...")
+    log.info("Running multi-agent review pipeline...")
     tracker = TokenUsageCallback()
     result = graph.invoke(
-        {"code": pr.diff, "plan": None, "review": None, "report": "", "use_rag": True},
+        {"code": pr.diff, "plan": None, "review": None, "report": "",
+         "use_rag": True, "rag_collection": DEFAULT_COLLECTION},
         config={"callbacks": [tracker]},
     )
 
@@ -40,10 +44,11 @@ def review_pr(repo_name: str, pr_number: int) -> dict:
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
-    print(f"Score: {output['review_score']}/10 | Issues: {output['issues_count']}")
-    print(f"Report saved to: {out_path}")
+    log.info("Score: %d/10 | Issues: %d | saved to %s",
+             output["review_score"], output["issues_count"], out_path)
     return output
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     review_pr("psf/requests", 6710)

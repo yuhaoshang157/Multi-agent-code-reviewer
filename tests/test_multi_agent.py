@@ -74,7 +74,7 @@ def test_pipeline_runs_end_to_end():
     from src.agents.multi_agent import graph
 
     code = "def add(a, b):\n    return a + b\n"
-    result = graph.invoke({"code": code, "plan": None, "review": None, "report": ""})
+    result = graph.invoke({"code": code, "plan": None, "review": None, "report": "", "use_rag": True})
 
     assert result["plan"] is not None
     assert result["review"] is not None

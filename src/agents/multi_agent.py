@@ -19,7 +19,7 @@ from src.prompts.templates import (
     reporter_prompt,
 )
 from src.tools.code_chunker import chunk_python_code, chunk_diff
-from src.tools.rag_store import query_similar_bugs
+from src.tools.rag_store import query_similar_bugs, COLLECTION as DEFAULT_COLLECTION
 
 load_dotenv()
 
@@ -34,13 +34,16 @@ llm = ChatOpenAI(
 planner_llm = llm.with_structured_output(PlannerOutput)
 reviewer_llm = llm.with_structured_output(ReviewResult)
 
+MAX_RAG_RESULTS = 5  # cap total RAG hits injected into prompt to control token cost
+
 
 class ReviewState(TypedDict):
     code: str
     plan: Optional[PlannerOutput]
     review: Optional[ReviewResult]
     report: str
-    use_rag: bool  # set False to skip RAG retrieval (used in ablation experiments)
+    use_rag: bool       # set False to skip RAG retrieval (used in ablation experiments)
+    rag_collection: str  # Milvus collection name; supports exp2/exp3 multi-collection runs
 
 
 def planner_node(state: ReviewState) -> dict:
@@ -62,8 +65,13 @@ def reviewer_node(state: ReviewState) -> dict:
         # RAG: chunk code, query each chunk, deduplicate by source + review prefix
         rag_lines = []
         seen_reviews = set()
+        collection = state.get("rag_collection", DEFAULT_COLLECTION)
         for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
-            for hit in query_similar_bugs(chunk["code"], top_k=2):
+            if len(rag_lines) >= MAX_RAG_RESULTS:
+                break
+            for hit in query_similar_bugs(chunk["code"], top_k=2, collection=collection):
+                if len(rag_lines) >= MAX_RAG_RESULTS:
+                    break
                 dedup_key = f"{hit['source']}:{hit['review'][:200]}"
                 if dedup_key not in seen_reviews:
                     seen_reviews.add(dedup_key)
@@ -131,7 +139,8 @@ def read_file(path):
 
     print("=== Multi-Agent Code Review Pipeline ===\n")
     result = graph.invoke(
-        {"code": test_code, "plan": None, "review": None, "report": "", "use_rag": True}
+        {"code": test_code, "plan": None, "review": None, "report": "",
+         "use_rag": True, "rag_collection": DEFAULT_COLLECTION}
     )
 
     print("[Planner Output]")

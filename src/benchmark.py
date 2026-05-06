@@ -4,14 +4,19 @@ Fetches recent merged PRs automatically via GitHub API, reviews each, saves summ
 """
 
 import json
+import logging
 import os
 import time
 from datetime import datetime
 from pathlib import Path
+
+import requests
 from github import Github, Auth
 from dotenv import load_dotenv
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
 # Target repos covering different Python domains
 REPOS = [
@@ -24,7 +29,6 @@ REPOS = [
 ]
 
 PRS_PER_REPO = 4   # fetch 4 merged PRs per repo → ~24 total
-MAX_DIFF_CHARS = 8000   # skip PRs with very large diffs (too slow / expensive)
 OUTPUT_DIR = Path("outputs/benchmark")
 
 
@@ -40,7 +44,6 @@ def fetch_merged_prs(repo_name: str, n: int) -> list[dict]:
             break
         if not pr.merged:
             continue
-        # only PRs that touch .py files
         files = [f.filename for f in pr.get_files()]
         if not any(f.endswith(".py") for f in files):
             continue
@@ -51,24 +54,19 @@ def fetch_merged_prs(repo_name: str, n: int) -> list[dict]:
 
 def run_review(repo: str, pr_number: int) -> dict | None:
     """Call the FastAPI /review endpoint and return the result."""
-    import urllib.request
-    import urllib.error
-
-    payload = json.dumps({"repo": repo, "pr_number": pr_number}).encode()
-    req = urllib.request.Request(
-        "http://localhost:8000/review",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        print(f"  [ERROR] HTTP {e.code}: {e.read().decode()[:200]}")
+        resp = requests.post(
+            "http://localhost:8000/review",
+            json={"repo": repo, "pr_number": pr_number},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as e:
+        log.error("HTTP %d: %s", e.response.status_code, e.response.text[:200])
         return None
     except Exception as e:
-        print(f"  [ERROR] {e}")
+        log.error("Request failed: %s", e)
         return None
 
 
@@ -89,30 +87,29 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = OUTPUT_DIR / f"benchmark_{timestamp}.json"
 
-    # resume: load existing results and skip already-processed PRs
     results, existing_file = load_existing_results()
     done = {(r["repo"], r["pr_number"]) for r in results}
     if done:
-        print(f"Resuming from {existing_file.name}, {len(done)} PRs already done.\n")
+        log.info("Resuming from %s, %d PRs already done.", existing_file.name, len(done))
 
-    print(f"=== Benchmark started: {timestamp} ===\n")
+    log.info("=== Benchmark started: %s ===", timestamp)
 
     for repo in REPOS:
-        print(f"[{repo}] Fetching merged PRs...")
+        log.info("[%s] Fetching merged PRs...", repo)
         try:
             prs = fetch_merged_prs(repo, PRS_PER_REPO)
         except Exception as e:
-            print(f"  [ERROR] Failed to fetch PRs: {e}")
+            log.error("Failed to fetch PRs for %s: %s", repo, e)
             continue
 
-        print(f"  Found {len(prs)} PRs to review")
+        log.info("  Found %d PRs to review", len(prs))
 
         for pr in prs:
             pr_num = pr["pr_number"]
             if (repo, pr_num) in done:
-                print(f"  Skipping PR #{pr_num} (already done)")
+                log.info("  Skipping PR #%d (already done)", pr_num)
                 continue
-            print(f"  Reviewing PR #{pr_num}: {pr['title'][:60]}...")
+            log.info("  Reviewing PR #%d: %s...", pr_num, pr["title"][:60])
             start = time.time()
             result = run_review(repo, pr_num)
             elapsed = round(time.time() - start, 1)
@@ -130,36 +127,35 @@ def main():
                 }
                 results.append(entry)
                 done.add((repo, pr_num))
-                # write immediately so progress is not lost on crash
                 with open(out_file, "w", encoding="utf-8") as f:
                     json.dump(results, f, ensure_ascii=False, indent=2)
                 cost = result.get("token_usage", {}).get("estimated_cost_usd", 0)
-                print(f"    Score: {result['review_score']}/10 | Issues: {result['issues_count']} | {elapsed}s | ${cost:.4f}")
+                log.info("    Score: %d/10 | Issues: %d | %.1fs | $%.4f",
+                         result["review_score"], result["issues_count"], elapsed, cost)
             else:
-                print(f"    Skipped (error)")
+                log.warning("    PR #%d skipped (error)", pr_num)
 
             time.sleep(2)   # avoid rate limiting
 
-    # print summary
-    print(f"\n=== Summary ({len(results)} PRs reviewed) ===")
+    log.info("\n=== Summary (%d PRs reviewed) ===", len(results))
     if results:
         scores = [r["score"] for r in results]
-        print(f"Score range  : {min(scores)} - {max(scores)}")
-        print(f"Average score: {sum(scores)/len(scores):.1f}/10")
+        log.info("Score range  : %d - %d", min(scores), max(scores))
+        log.info("Average score: %.1f/10", sum(scores) / len(scores))
 
         total_tokens = sum(r.get("token_usage", {}).get("total_tokens", 0) for r in results)
         total_cost = sum(r.get("token_usage", {}).get("estimated_cost_usd", 0) for r in results)
-        print(f"Total tokens : {total_tokens:,}")
-        print(f"Total cost   : ${total_cost:.4f} USD")
-        print(f"Cost per PR  : ${total_cost/len(results):.4f} USD")
+        log.info("Total tokens : %d", total_tokens)
+        log.info("Total cost   : $%.4f USD", total_cost)
+        log.info("Cost per PR  : $%.4f USD", total_cost / len(results))
 
-        by_repo = {}
+        by_repo: dict[str, list] = {}
         for r in results:
             by_repo.setdefault(r["repo"], []).append(r["score"])
-        for repo, sc in by_repo.items():
-            print(f"  {repo}: avg {sum(sc)/len(sc):.1f} ({len(sc)} PRs)")
+        for r_name, sc in by_repo.items():
+            log.info("  %s: avg %.1f (%d PRs)", r_name, sum(sc) / len(sc), len(sc))
 
-    print(f"\nFull results saved to: {out_file}")
+    log.info("Full results saved to: %s", out_file)
 
 
 if __name__ == "__main__":
