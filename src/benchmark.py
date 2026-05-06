@@ -87,6 +87,7 @@ def load_existing_results() -> tuple[list[dict], Path | None]:
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = OUTPUT_DIR / f"benchmark_{timestamp}.json"
 
     # resume: load existing results and skip already-processed PRs
     results, existing_file = load_existing_results()
@@ -130,7 +131,6 @@ def main():
                 results.append(entry)
                 done.add((repo, pr_num))
                 # write immediately so progress is not lost on crash
-                out_file = OUTPUT_DIR / f"benchmark_{timestamp}.json"
                 with open(out_file, "w", encoding="utf-8") as f:
                     json.dump(results, f, ensure_ascii=False, indent=2)
                 cost = result.get("token_usage", {}).get("estimated_cost_usd", 0)

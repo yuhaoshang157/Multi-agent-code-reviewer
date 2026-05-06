@@ -27,7 +27,9 @@ _client: MilvusClient | None = None
 def _get_embedder() -> BGEM3FlagModel:
     global _embedder
     if _embedder is None:
-        _embedder = BGEM3FlagModel(MODEL_PATH, use_fp16=True, device="cuda")
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _embedder = BGEM3FlagModel(MODEL_PATH, use_fp16=(device == "cuda"), device=device)
     return _embedder
 
 

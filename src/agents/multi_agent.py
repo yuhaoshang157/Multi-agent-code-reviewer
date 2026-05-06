@@ -40,6 +40,7 @@ class ReviewState(TypedDict):
     plan: Optional[PlannerOutput]
     review: Optional[ReviewResult]
     report: str
+    use_rag: bool  # set False to skip RAG retrieval (used in ablation experiments)
 
 
 def planner_node(state: ReviewState) -> dict:
@@ -56,18 +57,20 @@ def reviewer_node(state: ReviewState) -> dict:
     plan: PlannerOutput = state["plan"]
     aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
 
-    # RAG: chunk code, query each chunk, deduplicate by source + review prefix
-    rag_lines = []
-    seen_reviews = set()
-    for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
-        for hit in query_similar_bugs(chunk["code"], top_k=2):
-            dedup_key = f"{hit['source']}:{hit['review'][:200]}"
-            if dedup_key not in seen_reviews:
-                seen_reviews.add(dedup_key)
-                rag_lines.append(
-                    f"- [{hit['similarity']}] [{hit['source']}/{hit['language']}] {hit['review']}"
-                )
-    rag_context = "\n".join(rag_lines)
+    rag_context = ""
+    if state.get("use_rag", True):
+        # RAG: chunk code, query each chunk, deduplicate by source + review prefix
+        rag_lines = []
+        seen_reviews = set()
+        for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
+            for hit in query_similar_bugs(chunk["code"], top_k=2):
+                dedup_key = f"{hit['source']}:{hit['review'][:200]}"
+                if dedup_key not in seen_reviews:
+                    seen_reviews.add(dedup_key)
+                    rag_lines.append(
+                        f"- [{hit['similarity']}] [{hit['source']}/{hit['language']}] {hit['review']}"
+                    )
+        rag_context = "\n".join(rag_lines)
 
     result = reviewer_llm.invoke(
         [
@@ -128,7 +131,7 @@ def read_file(path):
 
     print("=== Multi-Agent Code Review Pipeline ===\n")
     result = graph.invoke(
-        {"code": test_code, "plan": None, "review": None, "report": ""}
+        {"code": test_code, "plan": None, "review": None, "report": "", "use_rag": True}
     )
 
     print("[Planner Output]")

@@ -7,7 +7,7 @@
 
 | 层 | 选择 |
 |---|---|
-| 主模型 API | Claude 3.5 Sonnet via OpenRouter (`anthropic/claude-3-5-sonnet`) |
+| 主模型 API | Claude Sonnet 4.6 via OpenRouter (`anthropic/claude-sonnet-4.6`) |
 | Agent 编排 | LangGraph |
 | RAG 向量库 | Milvus (docker 本地起) |
 | Embedding | BGE-M3 |
@@ -156,62 +156,166 @@ LangGraph Orchestrator (StateGraph)
 
 ## Week 4 规划（实验验证）
 
-> 目标：用系统实验回答"RAG 到底有没有用"、"怎么让它更有用"。
-> 面试时能说出实验设计、结论和数据支撑，就是深度。
+> 目标：用系统实验回答"RAG 到底有没有用"，产出可量化的 BERTScore 数据。
+> **时间约束**：5.7 简历投递、5.9 雅思，Week 4 有效工期约 4 天，优先完成实验一。
 
-### 实验一：RAG vs No-RAG 消融实验
+### 文件结构
 
-| 维度 | 说明 |
-|---|---|
-| 数据 | `eval_set.jsonl` 中随机抽 50-100 条，覆盖 6 数据集和主要语言 |
-| 方法 | 每条 code 送 Reviewer Agent 跑两遍——带 RAG vs 不带 RAG |
-| 指标 | BERTScore（与 ground truth review 语义相似度）、review_score、issues_count |
-| 统计 | 配对 t 检验验证差异显著性 |
-| 产出 | `src/eval/evaluator.py` + `outputs/eval/rag_vs_no_rag.json` |
+```
+src/eval/
+├── __init__.py
+└── evaluator.py              # 评估框架核心：采样 + 运行 + BERTScore + 统计检验
 
-### 实验二：嵌入策略消融实验
+outputs/eval/
+├── exp1_rag_ablation.json    # 实验一：RAG vs No-RAG
+├── exp2_embed_strategy.json  # 实验二：嵌入策略对比（可选）
+└── exp3_data_scale.json      # 实验三：数据规模缩放（可选）
+```
 
-嵌入策略 = 把什么内容变成向量 + 用什么查什么。
+### 核心变更（已完成）：`ReviewState` 新增 `use_rag` 字段
 
-| 变体 | RAG 知识库嵌入 | 查询 | 假设 |
+```python
+# src/agents/multi_agent.py — 已加入
+class ReviewState(TypedDict):
+    ...
+    use_rag: bool  # 传 False 关闭 RAG，用于消融实验
+
+# reviewer_node 已改为：
+if state.get("use_rag", True):
+    # 执行 RAG 召回 ...
+
+# 调用示例
+graph.invoke({"code": code, ..., "use_rag": False})   # 关闭 RAG
+graph.invoke({"code": code, ..., "use_rag": True})    # 开启 RAG（默认）
+```
+
+### 依赖安装
+
+```bash
+uv pip install bert-score scipy
+# bert_score 首次运行自动下载 microsoft/deberta-xlarge-mnli（约 900 MB），只需一次
+```
+
+### `evaluator.py` 接口设计
+
+```python
+# ---- 底层运行函数 ----
+def run_review(code: str, ground_truth: str, use_rag: bool) -> dict:
+    """调 graph.invoke，返回:
+    {"review_text": str, "review_score": int, "issues_count": int}
+    """
+
+# ---- 评分函数 ----
+def score_bertscore(predictions: list[str], references: list[str]) -> list[float]:
+    """用 bert_score 库计算每条样本的 F1，model_type="microsoft/deberta-xlarge-mnli"
+    返回长度与输入相同的 float 列表。
+    """
+
+# ---- 实验一：RAG vs No-RAG ----
+def exp1_rag_ablation(n_samples: int = 50, seed: int = 42) -> None:
+    """
+    1. 从 data/eval_set.jsonl 随机采样 n_samples 条（seed 固定）
+    2. 每条 code 跑两遍：use_rag=True 和 use_rag=False
+    3. 计算两组 BERTScore F1 均值 + 配对 t 检验（scipy.stats.ttest_rel）
+    4. 写 outputs/eval/exp1_rag_ablation.json
+    """
+
+# ---- 实验二：嵌入策略 ----
+def exp2_embed_strategy(n_samples: int = 30) -> None:
+    """
+    需提前准备三个 Milvus collection：
+      code_review_rag_A（嵌入 code，当前默认）
+      code_review_rag_B（嵌入 review）
+      code_review_rag_C（嵌入 code + review 拼接）
+    对比三种策略下 BERTScore，写 exp2_embed_strategy.json
+    """
+
+# ---- 实验三：数据规模 ----
+def exp3_data_scale(n_samples: int = 30) -> None:
+    """
+    需提前准备三个 collection：1K / 10K / 73K 规模
+    对比不同数据量下 BERTScore，写 exp3_data_scale.json
+    """
+
+# ---- CLI 入口 ----
+# python -m src.eval.evaluator --exp rag_ablation --n 50
+# python -m src.eval.evaluator --exp embed_strategy --n 30
+# python -m src.eval.evaluator --exp data_scale --n 30
+# python -m src.eval.evaluator --exp rag_ablation --n 5   ← 先用 5 条验证流程
+```
+
+### 实验一输出格式 (`exp1_rag_ablation.json`)
+
+```json
+{
+  "experiment": "rag_ablation",
+  "n_samples": 50,
+  "seed": 42,
+  "rag": {
+    "bertscore_f1_mean": 0.712,
+    "bertscore_f1_std": 0.043,
+    "avg_review_score": 6.4,
+    "avg_issues_count": 3.8
+  },
+  "no_rag": {
+    "bertscore_f1_mean": 0.688,
+    "bertscore_f1_std": 0.051,
+    "avg_review_score": 5.9,
+    "avg_issues_count": 3.1
+  },
+  "delta_bertscore_f1": 0.024,
+  "t_stat": 2.31,
+  "p_value": 0.025,
+  "significant_at_0.05": true
+}
+```
+
+### 成本估算
+
+| 实验 | 样本数 | API 调用次数 | 估算费用 |
 |---|---|---|---|
-| A（当前 baseline） | `code` 字段 | code → code 相似 | 代码长得像 → 审查意见相关 |
-| B | `review` 字段 | code → review 相似 | 直接匹配审查意见语义 |
-| C | `code + review` 拼接 | code → code+review | 信息最多，但向量空间混杂 |
+| 实验一 | 50 | 150（3 节点 × 2 组 × 50）| ~$6.50 |
+| 实验二 | 30 | 270（3 节点 × 3 策略 × 30）| ~$3.90 |
+| 实验三 | 30 | 270（3 节点 × 3 规模 × 30）| ~$3.90 |
+| **合计** | | ~690 次调用 | **~$14** |
 
-> 如果 B 组 BERTScore 显著高于 A 组 → 重建 Milvus 集合，切换嵌入策略。
+> 建议先用 `--n 5` 验证流程跑通（~$0.65），再扩到 50 条。
 
-### 实验三：数据规模缩放实验
+### 实验二三的前置准备
 
-| 规模 | 条数 | 说明 |
+实验二（嵌入策略）和实验三（数据规模）需要额外构建 Milvus collection：
+
+```bash
+# 实验二：重建两个不同嵌入字段的 collection（在 rag_store.py 加参数支持）
+# 实验三：从 rag_kb.jsonl 分别采样 1K/10K 写成新 JSONL，再 ingest
+python -m src.tools.rag_store --ingest --jsonl data/rag_kb_1k.jsonl --collection code_review_1k
+python -m src.tools.rag_store --ingest --jsonl data/rag_kb_10k.jsonl --collection code_review_10k
+# 73K 用现有 code_review_rag
+```
+
+### 时间安排（修订版，已按实际截止日调整）
+
+| 天 | 日期 | 任务 |
 |---|---|---|
-| 小 | 1,000 | 随机采样 |
-| 中 | 10,000 | 分层采样（每源等量） |
-| 大 | 73,343 | 全量 |
-
-> 检验"数据越多效果越好"的假设，找到收益递减点。
+| Day 1 | 5.06 | 代码 review + bug 修复 + CLAUDE.md 完善（本次）|
+| Day 2 | 5.07 | 搭 `src/eval/` 框架，`--n 5` 验证，简历投递 |
+| Day 3 | 5.08 | 实验一全量（50 条），产出 BERTScore 对比数据 |
+| Day 4 | 5.09（雅思后）| 实验二/三酌情，汇总结果写入 README |
+| Day 5 | 5.10+ | README 加实验表，项目收尾，准备面试讲解 |
 
 ### 实验四（可选）：检索策略对比
 
 | 方式 | 说明 | 面试价值 |
 |---|---|---|
 | 单路稠密（当前） | BGE-M3 语义匹配 | baseline |
-| 混合检索 | BM25（稀疏）+ BGE（稠密）双路融合 | 工业界标准 |
-| 重排序 | 加 Cross-Encoder Reranker 精排 top-k | 两阶段检索是生产标配 |
+| 混合检索 | BM25（稀疏）+ BGE（稠密）双路 RRF 融合 | 工业界标准 |
+| 重排序 | Cross-Encoder Reranker 精排 top-k | 两阶段检索是生产标配 |
 
 ### 实验五（可选）：Self-Reflection Agent
 
-在 Reviewer 之后加一个自省环节：模型检查自己的 review 是否有误判或遗漏。用实验一的 eval set 对比 reflection 前后的 BERTScore 变化。
-
-### 时间安排
-
-| 天 | 任务 |
-|---|---|
-| Day 1 | 搭建实验框架：`src/eval/evaluator.py`，BERTScore 计算，两组对比 |
-| Day 2 | 执行实验一（RAG vs No-RAG），输出对比报告 |
-| Day 3 | 执行实验二（嵌入策略消融），确定最优策略 |
-| Day 4 | 执行实验三（数据规模），确定最优数据量 |
-| Day 5 | 汇总实验报告，更新 README 加入实验数据 |
+在 Reviewer 之后加自省节点：模型检查自己的 review 是否有误判或遗漏。
+实现方式：`StateGraph` 新增 `reflector` 节点，`ReviewState` 加 `reflection: str` 字段。
+用实验一的 eval set 对比 reflection 前后 BERTScore 变化。
 
 ---
 
@@ -235,10 +339,83 @@ LangGraph Orchestrator (StateGraph)
 
 ## 🔧 待优化项
 
-### RAG 上下文质量：用完整函数体替代纯 diff 行
-- **当前问题**：`chunk_diff` 只提取 `+` 新增行，若 PR 只改了函数内部几行，extracted code 没有 `def`，tree-sitter 找不到函数节点
-- **优化方案**：解析 diff 的 `@@` 行号 → GitHub API 拿原始文件 → tree-sitter 定位完整函数体
+> 最后更新：2026-05-06。按对项目稳定性和面试价值的影响排序。
+
+### 高优先级（直接影响正确性）
+
+#### 1. 集成测试缺少 `use_rag` 字段
+- **文件**：`tests/test_multi_agent.py:77`
+- **问题**：`graph.invoke({"code": code, "plan": None, "review": None, "report": ""})` 未传 `use_rag`；虽然 `.get("use_rag", True)` 有默认值不会崩，但 State schema 已声明该字段，语义不完整
+- **修复**：加 `"use_rag": True`
+
+#### 2. `rag_store.py` 全局单例线程竞争
+- **文件**：`src/tools/rag_store.py:27-38`
+- **问题**：FastAPI 把同步 endpoint 放进线程池；两个并发请求都看到 `_embedder is None`，导致 BGE-M3 被重复初始化（GPU 内存翻倍占用）
+- **修复**：double-checked locking
+  ```python
+  import threading
+  _lock = threading.Lock()
+  def _get_embedder():
+      global _embedder
+      if _embedder is None:
+          with _lock:
+              if _embedder is None:
+                  ...
+  ```
+- `_get_client()` 同理
+
+#### 3. RAG 结果无上限，大 PR 撑爆 prompt
+- **文件**：`src/agents/multi_agent.py:62-73`
+- **问题**：`top_k=2` per chunk，15 个函数的 diff → 最多 30 条结果全拼进 prompt，大幅增加 token 成本且稀释重点
+- **修复**：加全局上限常量 `MAX_RAG_RESULTS = 5`，命中后 `break`
+
+#### 4. FastAPI 入参无校验
+- **文件**：`src/api/main.py:15-18`
+- **问题**：`repo="notvalid"` 或 `pr_number=-1` 触发 PyGithub 原始异常，500 响应直接暴露内部堆栈
+- **修复**：在 `ReviewRequest` 里加 `@field_validator`，校验 `repo` 格式为 `owner/name`、`pr_number > 0`
+
+---
+
+### 中优先级（Week 4 实验前置条件）
+
+#### 5. `rag_store.py` CLI 不支持多集合参数
+- **文件**：`src/tools/rag_store.py:183-190`
+- **问题**：实验二/三需要往不同 collection 注入不同嵌入字段的数据，但 CLI 写死了 `COLLECTION` 和嵌入 `code` 字段
+- **修复**：`init_rag_from_dataset()` 增加 `collection` 和 `embed_field` 参数，CLI 加 `--collection` / `--embed-field` 选项
+
+#### 6. `src/eval/` 目录不存在
+- **问题**：`python -m src.eval.evaluator` 直接失败
+- **修复**：创建 `src/eval/__init__.py` + `src/eval/evaluator.py` 骨架
+
+#### 7. `TokenUsageCallback` 无法区分节点级 token 消耗
+- **文件**：`src/tools/token_tracker.py`
+- **问题**：三个节点的 token 都累加进总量，看不出 Reviewer（有 RAG）比 Planner 贵多少
+- **修复**：记录每次 `on_llm_end` 调用明细 `self.calls: list[dict]`，支持按调用序号分析
+
+---
+
+### 低优先级（可观测性 / 代码整洁）
+
+#### 8. 全 `print()` 无日志级别
+- **问题**：生产服务里无 timestamp、无级别、无法静音 RAG 进度刷新（`[RAG] Embedded 1000 items...`）
+- **修复**：改用 `logging.getLogger(__name__)`，通过 `LOG_LEVEL=WARNING` 环境变量控制
+
+#### 9. `benchmark.py` HTTP 调用用标准库 `urllib.request`
+- **问题**：项目已依赖 `requests`，benchmark 却用更啰嗦的 `urllib.request`，不一致
+- **修复**：改用 `requests.post(url, json=payload, timeout=180)`
+
+#### 10. `code_chunker.py` 只处理 Python，非 Python 文件静默降级
+- **问题**：评 huggingface/transformers PR 时若改动涉及 `.js`/`.yaml`，tree-sitter Python 解析失败 fallback 成整段残缺代码送 RAG，召回质量差
+- **当前状态**：已知限制，简历项目可接受；生产级需要按文件扩展名路由到对应 Language grammar
+
+#### 11. RAG 上下文质量：用完整函数体替代纯 diff 行
+- **问题**：`chunk_diff` 只提取 `+` 新增行，函数内部小改动提取出来没有 `def`，tree-sitter 找不到函数节点，fallback 成残缺代码
+- **优化方案**：解析 diff 的 `@@` 行号 → GitHub API 拿原始文件 → tree-sitter 定位包含该行的完整函数体
 - **当前状态**：暂不做，fallback 对简历项目够用
+
+#### 12. `CLAUDE.md` 技术栈表模型名与代码不一致
+- **问题**：`CLAUDE.md:10` 写的是 `claude-3-5-sonnet`，`multi_agent.py:27` 实际用 `claude-sonnet-4.6`
+- **修复**：把表里的模型 ID 改成 `anthropic/claude-sonnet-4.6`
 
 ## ⚠️ 避坑提醒
 
