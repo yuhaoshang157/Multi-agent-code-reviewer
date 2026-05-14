@@ -46,7 +46,14 @@ def _get_client() -> MilvusClient:
     if _client is None:
         with _client_lock:
             if _client is None:
-                _client = MilvusClient(uri=MILVUS_URI)
+                log.info("[RAG] Connecting to Milvus at %s ...", MILVUS_URI)
+                try:
+                    _client = MilvusClient(uri=MILVUS_URI, timeout=10)
+                    log.info("[RAG] Milvus connection established.")
+                except Exception as e:
+                    raise RuntimeError(
+                        f"[RAG] Cannot connect to Milvus ({MILVUS_URI}). Start it with: docker-compose up -d milvus\nOriginal error: {e}"
+                    ) from e
     return _client
 
 
@@ -182,7 +189,14 @@ def query_similar_bugs(
     """
     client = _get_client()
 
-    if not client.has_collection(collection):
+    try:
+        has_col = client.has_collection(collection)
+    except Exception as e:
+        raise RuntimeError(
+            f"[RAG] Milvus query failed. Ensure the service is running: docker-compose up -d milvus\nOriginal error: {e}"
+        ) from e
+
+    if not has_col:
         if collection == COLLECTION:
             log.info("[RAG] Collection '%s' not found. Auto-ingesting...", collection)
             init_rag_from_dataset()

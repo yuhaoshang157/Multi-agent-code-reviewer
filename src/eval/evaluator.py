@@ -31,7 +31,7 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
 # Core runner
 # ---------------------------------------------------------------------------
 
-def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION, model: str = "claude") -> dict:
+def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION, model: str = "deepseek-pro") -> dict:
     """Run the review pipeline and return review_text, score, issues_count."""
     tracker = TokenUsageCallback()
     result = graph.invoke(
@@ -56,14 +56,16 @@ def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION, m
 def score_bertscore(predictions: list[str], references: list[str]) -> list[float]:
     """Compute BERTScore F1 for each (prediction, reference) pair.
 
-    Uses microsoft/deberta-xlarge-mnli. Downloads ~900 MB on first run.
+    Uses roberta-large (~1.4 GB, English). Downloads on first run.
+    Reviewer output is English; ground truth reviews are English — language aligned.
     Returns a list of float F1 scores, one per sample.
     """
     from bert_score import score as bert_score_fn
     _, _, f1 = bert_score_fn(
         predictions,
         references,
-        model_type="microsoft/deberta-xlarge-mnli",
+        model_type="roberta-large",
+        lang="en",
         verbose=False,
     )
     return f1.tolist()
@@ -94,8 +96,16 @@ def exp1_rag_ablation(n_samples: int = 50, seed: int = 42) -> None:
         log.info("[Exp1] Sample %d/%d...", i + 1, len(samples))
         rag_results.append(run_review(sample["code"], use_rag=True))
         no_rag_results.append(run_review(sample["code"], use_rag=False))
+        # Save incrementally so a mid-run crash doesn't lose completed samples
+        _save_output("exp1_llm_results.json", {
+            "samples_done": i + 1,
+            "samples": [{"source": s.get("source"), "language": s.get("language")} for s in samples],
+            "rag_results": rag_results,
+            "no_rag_results": no_rag_results,
+            "ground_truth_reviews": ground_truth_reviews,
+        })
 
-    log.info("[Exp1] Computing BERTScore...")
+    log.info("[Exp1] LLM phase complete. Computing BERTScore...")
     rag_f1 = score_bertscore([r["review_text"] for r in rag_results], ground_truth_reviews)
     no_rag_f1 = score_bertscore([r["review_text"] for r in no_rag_results], ground_truth_reviews)
 
@@ -291,6 +301,74 @@ def _save_output(filename: str, data: dict) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+def exp1_bertscore_resume() -> None:
+    """Compute BERTScore on already-saved LLM results from exp1_llm_results.json.
+
+    Use this when the LLM phase succeeded but BERTScore failed (e.g. network issue).
+    Reads outputs/eval/exp1_llm_results.json and writes exp1_rag_ablation.json.
+    """
+    from scipy import stats
+
+    saved_path = OUTPUT_DIR / "exp1_llm_results.json"
+    if not saved_path.exists():
+        log.error("[Exp1] No saved LLM results found at %s. Run without --resume first.", saved_path)
+        return
+
+    with open(saved_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    rag_results = data["rag_results"]
+    no_rag_results = data["no_rag_results"]
+    ground_truth_reviews = data["ground_truth_reviews"]
+    samples_meta = data.get("samples", [])
+    n_samples = len(rag_results)
+
+    log.info("[Exp1-resume] Loaded %d saved results. Computing BERTScore...", n_samples)
+    rag_f1 = score_bertscore([r["review_text"] for r in rag_results], ground_truth_reviews)
+    no_rag_f1 = score_bertscore([r["review_text"] for r in no_rag_results], ground_truth_reviews)
+
+    t_stat, p_value = stats.ttest_rel(rag_f1, no_rag_f1)
+    mean = lambda xs: sum(xs) / len(xs)
+    std = lambda xs: (sum((x - mean(xs)) ** 2 for x in xs) / len(xs)) ** 0.5
+
+    output = {
+        "experiment": "rag_ablation",
+        "n_samples": n_samples,
+        "resumed_from": str(saved_path),
+        "rag": {
+            "bertscore_f1_mean": round(mean(rag_f1), 4),
+            "bertscore_f1_std": round(std(rag_f1), 4),
+            "avg_review_score": round(mean([r["review_score"] for r in rag_results]), 2),
+            "avg_issues_count": round(mean([r["issues_count"] for r in rag_results]), 2),
+        },
+        "no_rag": {
+            "bertscore_f1_mean": round(mean(no_rag_f1), 4),
+            "bertscore_f1_std": round(std(no_rag_f1), 4),
+            "avg_review_score": round(mean([r["review_score"] for r in no_rag_results]), 2),
+            "avg_issues_count": round(mean([r["issues_count"] for r in no_rag_results]), 2),
+        },
+        "delta_bertscore_f1": round(mean(rag_f1) - mean(no_rag_f1), 4),
+        "t_stat": round(float(t_stat), 4),
+        "p_value": round(float(p_value), 4),
+        "significant_at_0.05": bool(p_value < 0.05),
+        "per_sample": [
+            {
+                "source": samples_meta[i].get("source", "") if i < len(samples_meta) else "",
+                "language": samples_meta[i].get("language", "") if i < len(samples_meta) else "",
+                "rag_f1": round(rag_f1[i], 4),
+                "no_rag_f1": round(no_rag_f1[i], 4),
+            }
+            for i in range(n_samples)
+        ],
+    }
+
+    _save_output("exp1_rag_ablation.json", output)
+    log.info("[Exp1-resume] Done.")
+    log.info("  RAG BERTScore F1:    %.4f ± %.4f", output["rag"]["bertscore_f1_mean"], output["rag"]["bertscore_f1_std"])
+    log.info("  No-RAG BERTScore F1: %.4f ± %.4f", output["no_rag"]["bertscore_f1_mean"], output["no_rag"]["bertscore_f1_std"])
+    log.info("  Delta: %+.4f  |  p=%.4f  |  significant=%s", output["delta_bertscore_f1"], output["p_value"], output["significant_at_0.05"])
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Run evaluation experiments")
@@ -302,10 +380,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--n", type=int, default=50, help="Number of eval samples (default: 50)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
+    parser.add_argument("--resume", action="store_true", help="Skip LLM phase, reuse saved exp1_llm_results.json")
     args = parser.parse_args()
 
     if args.exp == "rag_ablation":
-        exp1_rag_ablation(n_samples=args.n, seed=args.seed)
+        if args.resume:
+            exp1_bertscore_resume()
+        else:
+            exp1_rag_ablation(n_samples=args.n, seed=args.seed)
     elif args.exp == "embed_strategy":
         exp2_embed_strategy(n_samples=args.n, seed=args.seed)
     elif args.exp == "data_scale":

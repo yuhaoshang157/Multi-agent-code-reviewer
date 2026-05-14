@@ -11,42 +11,44 @@ PLANNER_SYSTEM = """\
 4. 可维护性：命名规范、代码复杂度、死代码、非惯用写法
 
 返回包含 3-5 个具体检查点的评审计划，每个检查点需明确指向代码的具体位置。
-所有输出必须使用中文。"""
+所有输出必须使用中文。以如下 JSON 格式输出，不要添加任何额外字段：
+{"aspects": [{"category": "类别", "description": "具体检查点描述"}], "summary": "代码一句话概述"}"""
 
 REVIEWER_SYSTEM = """\
-你是一名资深软件工程师，正在进行严格的代码评审。
-根据提供的检查清单对代码进行评审。
+You are a senior software engineer conducting a rigorous code review.
+Review the code against the provided checklist.
 
-规则：
-- 只报告代码中真实存在的问题，不要虚构
-- 每个问题需包含：类型、严重程度、精确位置、清晰描述、可操作的修复建议
-- 严重程度：critical（安全/崩溃）、high（正确性/数据丢失）、medium（性能）、low（风格）
-- 对代码整体质量评分，1分（最差）到10分（最好）
-- 如果某些方面代码本身没有问题，直接说明，不要凑数
+Rules:
+- Only report real issues present in the code, do not fabricate
+- Each issue must include: type, severity, precise location, clear description, actionable fix suggestion
+- Severity levels: critical (security/crash), high (correctness/data loss), medium (performance), low (style)
+- Score the overall code quality from 1 (worst) to 10 (best)
+- If no issues exist in a category, skip it — do not pad the list
 
-优秀问题报告示例：
-<示例>
-issue_type: 安全性
+Example issues:
+<example>
+issue_type: security
 severity: critical
-location: get_user() 函数，第6行
-description: 源码中硬编码了密码 "admin123"。即使是死代码，也会在版本控制历史中泄露凭据。
-suggestion: 直接删除该行。如需认证，改用 os.environ.get("ADMIN_PASSWORD")。
-</示例>
-<示例>
-issue_type: 正确性
+location: get_user() function, line 6
+description: Password "admin123" is hardcoded in source. Even as dead code it leaks credentials in version control history.
+suggestion: Delete the line. If authentication is needed use os.environ.get("ADMIN_PASSWORD").
+</example>
+<example>
+issue_type: correctness
 severity: high
-location: read_file() 函数，第14行
-description: 用 open() 打开文件句柄后从未关闭。多次调用会耗尽文件描述符，导致进程崩溃。
-suggestion: 改用 `with open(path) as f: return f.read()`，确保句柄被释放。
-</示例>
-<示例>
-issue_type: 性能
+location: read_file() function, line 14
+description: File handle opened with open() is never closed. Repeated calls will exhaust file descriptors and crash the process.
+suggestion: Use `with open(path) as f: return f.read()` to guarantee the handle is released.
+</example>
+<example>
+issue_type: performance
 severity: medium
-location: process_data() 函数，第11行
-description: 循环内使用列表拼接，每次迭代都创建新列表，时间复杂度为 O(n²)。
-suggestion: 改用 result.append(item * 2) 或列表推导式：[item * 2 for item in data]。
-</示例>
-所有输出必须使用中文。"""
+location: process_data() function, line 11
+description: List concatenation inside loop creates a new list on every iteration, making the complexity O(n²).
+suggestion: Use result.append(item * 2) or a list comprehension: [item * 2 for item in data].
+</example>
+All output must be in English. Output the following JSON format with no extra fields:
+{"issues": [{"issue_type": "type", "severity": "severity", "location": "location", "description": "description", "suggestion": "fix suggestion"}], "overall_score": 6, "summary": "summary"}"""
 
 REPORTER_SYSTEM = """\
 你是一名技术写作专家，负责为开发团队生成代码评审报告。
@@ -66,13 +68,13 @@ def planner_prompt(code: str) -> str:
 
 
 def reviewer_prompt(code: str, plan_summary: str, aspects: str, rag_context: str = "") -> str:
-    rag_section = f"\n\n历史相似问题（RAG 召回，供参考）：\n{rag_context}" if rag_context else ""
+    rag_section = f"\n\nSimilar historical issues (RAG retrieved, for reference):\n{rag_context}" if rag_context else ""
     return (
-        f"根据以下检查清单对代码进行评审。\n\n"
-        f"代码概述：{plan_summary}\n\n"
-        f"评审清单：\n{aspects}"
+        f"Review the code against the checklist below.\n\n"
+        f"Code summary: {plan_summary}\n\n"
+        f"Review checklist:\n{aspects}"
         f"{rag_section}\n\n"
-        f"代码：\n```python\n{code}\n```"
+        f"Code:\n```python\n{code}\n```"
     )
 
 

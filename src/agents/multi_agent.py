@@ -1,15 +1,22 @@
 """Multi-agent code review pipeline: Planner → Reviewer → Reporter."""
 
+import ast
+import logging
 import os
 import json
 from typing import Optional
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
+
+log = logging.getLogger(__name__)
+from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
+from langchain_core.exceptions import OutputParserException
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 
-from src.schemas.review import PlannerOutput, ReviewResult
+from src.schemas.review import PlannerOutput, ReviewAspect, ReviewResult, ReviewIssue
 from src.prompts.templates import (
     PLANNER_SYSTEM,
     REVIEWER_SYSTEM,
@@ -19,12 +26,12 @@ from src.prompts.templates import (
     reporter_prompt,
 )
 from src.tools.code_chunker import chunk_python_code, chunk_diff
-from src.tools.rag_store import query_similar_bugs, COLLECTION as DEFAULT_COLLECTION
+from src.tools.rag_store import query_similar_bugs, COLLECTION as DEFAULT_COLLECTION  # re-exported for tests
 
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# LLM registry — pre-instantiate all supported models at module load time.
+# LLM registry -pre-instantiate all supported models at module load time.
 # Nodes select from this registry at runtime via state["model"].
 # ---------------------------------------------------------------------------
 _LLM_REGISTRY: dict[str, ChatOpenAI] = {
@@ -38,16 +45,18 @@ _LLM_REGISTRY: dict[str, ChatOpenAI] = {
     "deepseek-pro": ChatOpenAI(
         model=os.environ.get("DEEPSEEK_V4_Pro_MODEL", "deepseek-v4-pro"),
         openai_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-        openai_api_base=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        openai_api_base="https://api.deepseek.com",
         max_retries=3,
         request_timeout=60,
+        extra_body={"thinking": {"type": "disabled"}},
     ),
     "deepseek-flash": ChatOpenAI(
         model=os.environ.get("DEEPSEEK_V4_Flash_MODEL", "deepseek-v4-flash"),
         openai_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-        openai_api_base=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        openai_api_base="https://api.deepseek.com",
         max_retries=3,
         request_timeout=60,
+        extra_body={"thinking": {"type": "disabled"}},
     ),
 }
 
@@ -69,24 +78,90 @@ class ReviewState(TypedDict):
     model: str          # LLM provider: "claude" | "deepseek-pro" | "deepseek-flash"
 
 
-def planner_node(state: ReviewState) -> dict:
-    llm = _get_llm(state)
-    result = llm.with_structured_output(PlannerOutput).invoke(
-        [
-            SystemMessage(content=PLANNER_SYSTEM),
-            HumanMessage(content=planner_prompt(state["code"])),
-        ]
+def _lenient_parse_planner(exc: OutputParserException) -> PlannerOutput:
+    """Build PlannerOutput from a failed structured-output attempt (missing fields get defaults)."""
+    try:
+        raw = getattr(exc, "llm_output", None) or "{}"
+        data = ast.literal_eval(raw) if isinstance(raw, str) else {}
+    except Exception:
+        data = {}
+
+    aspects = [
+        ReviewAspect(
+            category=str(item.get("category") or "general"),
+            description=str(item.get("description") or ""),
+        )
+        for item in data.get("aspects", [])
+    ]
+    return PlannerOutput(
+        aspects=aspects,
+        summary=str(data.get("summary") or ""),
     )
+
+
+def planner_node(state: ReviewState) -> dict:
+    log.info("[Planner] Analyzing code structure...")
+    llm = _get_llm(state)
+    try:
+        result = llm.with_structured_output(PlannerOutput, method="json_mode").invoke(
+            [
+                SystemMessage(content=PLANNER_SYSTEM),
+                HumanMessage(content=planner_prompt(state["code"])),
+            ]
+        )
+    except OutputParserException as e:
+        log.warning("[Planner] Structured parse failed (%s), applying lenient fallback...", e.__class__.__name__)
+        result = _lenient_parse_planner(e)
+    log.info("[Planner] Done - %d review aspects identified", len(result.aspects))
     return {"plan": result}
 
 
+def _lenient_parse_review(exc: OutputParserException) -> ReviewResult:
+    """Build ReviewResult from a failed structured-output attempt.
+
+    When json_mode produces valid JSON but with a missing/misplaced field,
+    LangChain parses the JSON successfully then fails at Pydantic validation.
+    The parsed dict is stored in exc.llm_output as repr(dict); we recover it
+    here and fill in any missing fields with safe defaults.
+    """
+    try:
+        raw = getattr(exc, "llm_output", None) or "{}"
+        data = ast.literal_eval(raw) if isinstance(raw, str) else {}
+    except Exception:
+        data = {}
+
+    issues: list[ReviewIssue] = []
+    for item in data.get("issues", []):
+        suggestion = (
+            item.get("suggestion")
+            or item.get("建议")
+            or item.get("修复建议")
+            or item.get("fix")
+            or ""
+        )
+        issues.append(ReviewIssue(
+            issue_type=str(item.get("issue_type") or "unknown"),
+            severity=str(item.get("severity") or "medium"),
+            location=str(item.get("location") or ""),
+            description=str(item.get("description") or ""),
+            suggestion=str(suggestion),
+        ))
+
+    return ReviewResult(
+        issues=issues,
+        overall_score=int(data.get("overall_score") or 5),
+        summary=str(data.get("summary") or "[Recovered from parse error]"),
+    )
+
+
 def reviewer_node(state: ReviewState) -> dict:
+    log.info("[Reviewer] Starting code review...")
     plan: PlannerOutput = state["plan"]
     aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
 
     rag_context = ""
     if state.get("use_rag", True):
-        # RAG: chunk code, query each chunk, deduplicate by source + review prefix
+        log.info("[Reviewer] RAG enabled, querying Milvus...")
         rag_lines = []
         seen_reviews = set()
         collection = state.get("rag_collection", DEFAULT_COLLECTION)
@@ -103,20 +178,27 @@ def reviewer_node(state: ReviewState) -> dict:
                         f"- [{hit['similarity']}] [{hit['source']}/{hit['language']}] {hit['review']}"
                     )
         rag_context = "\n".join(rag_lines)
+        log.info("[Reviewer] RAG done -%d hits injected into prompt", len(rag_lines))
+    else:
+        log.info("[Reviewer] RAG disabled, skipping Milvus query")
 
+    log.info("[Reviewer] Calling LLM for review result...")
     llm = _get_llm(state)
-    result = llm.with_structured_output(ReviewResult).invoke(
-        [
-            SystemMessage(content=REVIEWER_SYSTEM),
-            HumanMessage(
-                content=reviewer_prompt(state["code"], plan.summary, aspects_text, rag_context)
-            ),
-        ]
-    )
+    messages = [
+        SystemMessage(content=REVIEWER_SYSTEM),
+        HumanMessage(content=reviewer_prompt(state["code"], plan.summary, aspects_text, rag_context)),
+    ]
+    try:
+        result = llm.with_structured_output(ReviewResult, method="json_mode").invoke(messages)
+    except OutputParserException as e:
+        log.warning("[Reviewer] Structured parse failed (%s), applying lenient fallback...", e.__class__.__name__)
+        result = _lenient_parse_review(e)
+    log.info("[Reviewer] Done - score %d/10, %d issues found", result.overall_score, len(result.issues))
     return {"review": result}
 
 
 def reporter_node(state: ReviewState) -> dict:
+    log.info("[Reporter] Generating Markdown report...")
     review: ReviewResult = state["review"]
     review_json = json.dumps(review.model_dump(), indent=2)
     llm = _get_llm(state)
@@ -126,6 +208,7 @@ def reporter_node(state: ReviewState) -> dict:
             HumanMessage(content=reporter_prompt(review_json)),
         ]
     )
+    log.info("[Reporter] Done")
     return {"report": response.content}
 
 
@@ -143,6 +226,15 @@ graph = builder.compile()
 
 
 if __name__ == "__main__":
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     test_code = """
 def get_user(users, id):
     for i in range(len(users)):
@@ -166,7 +258,7 @@ def read_file(path):
     print("=== Multi-Agent Code Review Pipeline ===\n")
     result = graph.invoke(
         {"code": test_code, "plan": None, "review": None, "report": "",
-         "use_rag": True, "rag_collection": DEFAULT_COLLECTION, "model": "claude"}
+         "use_rag": False, "rag_collection": DEFAULT_COLLECTION, "model": "deepseek-flash"}
     )
 
     print("[Planner Output]")

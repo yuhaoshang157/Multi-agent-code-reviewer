@@ -71,10 +71,18 @@ def test_reporter_prompt_contains_json():
 @pytest.mark.integration
 def test_pipeline_runs_end_to_end():
     """Requires ANTHROPIC_API_KEY. Run with: pytest -m integration"""
-    from src.agents.multi_agent import graph
+    from src.agents.multi_agent import graph, DEFAULT_COLLECTION
 
     code = "def add(a, b):\n    return a + b\n"
-    result = graph.invoke({"code": code, "plan": None, "review": None, "report": "", "use_rag": True})
+    result = graph.invoke({
+        "code": code,
+        "plan": None,
+        "review": None,
+        "report": "",
+        "use_rag": True,
+        "rag_collection": DEFAULT_COLLECTION,
+        "model": "deepseek-pro",
+    })
 
     assert result["plan"] is not None
     assert result["review"] is not None
