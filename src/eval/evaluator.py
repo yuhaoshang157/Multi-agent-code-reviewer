@@ -31,12 +31,17 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs" / "eval"
 # Core runner
 # ---------------------------------------------------------------------------
 
-def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION, model: str = "deepseek-pro") -> dict:
-    """Run the review pipeline and return review_text, score, issues_count."""
+def run_review(code: str, use_rag: bool, collection: str = DEFAULT_COLLECTION, model: str = "deepseek-pro", skip_reporter: bool = True) -> dict:
+    """Run the review pipeline and return review_text, score, issues_count.
+
+    skip_reporter=True (default) stops after Reviewer, skipping the ~45s
+    Reporter LLM call whose Markdown output is unused in BERTScore.
+    """
     tracker = TokenUsageCallback()
     result = graph.invoke(
         {"code": code, "plan": None, "review": None, "report": "",
-         "use_rag": use_rag, "rag_collection": collection, "model": model},
+         "use_rag": use_rag, "rag_context": "", "rag_collection": collection,
+         "model": model, "skip_reporter": skip_reporter},
         config={"callbacks": [tracker]},
     )
     return {

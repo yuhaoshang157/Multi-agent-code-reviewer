@@ -73,9 +73,11 @@ class ReviewState(TypedDict):
     plan: Optional[PlannerOutput]
     review: Optional[ReviewResult]
     report: str
-    use_rag: bool       # set False to skip RAG retrieval (used in ablation experiments)
+    use_rag: bool        # set False to skip RAG retrieval (used in ablation experiments)
     rag_collection: str  # Milvus collection name; supports exp2/exp3 multi-collection runs
-    model: str          # LLM provider: "claude" | "deepseek-pro" | "deepseek-flash"
+    rag_context: str     # pre-fetched by rag_prefetch_node, consumed by reviewer_node
+    model: str           # LLM provider: "claude" | "deepseek-pro" | "deepseek-flash"
+    skip_reporter: bool  # set True to stop after Reviewer (eval mode: Reporter output unused)
 
 
 def _lenient_parse_planner(exc: OutputParserException) -> PlannerOutput:
@@ -154,33 +156,38 @@ def _lenient_parse_review(exc: OutputParserException) -> ReviewResult:
     )
 
 
+def rag_prefetch_node(state: ReviewState) -> dict:
+    """Runs in parallel with planner_node. Fetches RAG context so reviewer_node
+    can start immediately once both planner and this node complete (fan-in)."""
+    if not state.get("use_rag", True):
+        log.info("[RAG] Disabled, skipping Milvus query")
+        return {"rag_context": ""}
+
+    log.info("[RAG] Querying Milvus...")
+    rag_lines: list[str] = []
+    seen_reviews: set[str] = set()
+    collection = state.get("rag_collection", DEFAULT_COLLECTION)
+    for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
+        if len(rag_lines) >= MAX_RAG_RESULTS:
+            break
+        for hit in query_similar_bugs(chunk["code"], top_k=2, collection=collection):
+            if len(rag_lines) >= MAX_RAG_RESULTS:
+                break
+            dedup_key = f"{hit['source']}:{hit['review'][:200]}"
+            if dedup_key not in seen_reviews:
+                seen_reviews.add(dedup_key)
+                rag_lines.append(
+                    f"- [{hit['similarity']}] [{hit['source']}/{hit['language']}] {hit['review']}"
+                )
+    log.info("[RAG] Done - %d hits fetched", len(rag_lines))
+    return {"rag_context": "\n".join(rag_lines)}
+
+
 def reviewer_node(state: ReviewState) -> dict:
     log.info("[Reviewer] Starting code review...")
     plan: PlannerOutput = state["plan"]
     aspects_text = "\n".join(f"- [{a.category}] {a.description}" for a in plan.aspects)
-
-    rag_context = ""
-    if state.get("use_rag", True):
-        log.info("[Reviewer] RAG enabled, querying Milvus...")
-        rag_lines = []
-        seen_reviews = set()
-        collection = state.get("rag_collection", DEFAULT_COLLECTION)
-        for chunk in (chunk_diff(state["code"]) or chunk_python_code(state["code"])):
-            if len(rag_lines) >= MAX_RAG_RESULTS:
-                break
-            for hit in query_similar_bugs(chunk["code"], top_k=2, collection=collection):
-                if len(rag_lines) >= MAX_RAG_RESULTS:
-                    break
-                dedup_key = f"{hit['source']}:{hit['review'][:200]}"
-                if dedup_key not in seen_reviews:
-                    seen_reviews.add(dedup_key)
-                    rag_lines.append(
-                        f"- [{hit['similarity']}] [{hit['source']}/{hit['language']}] {hit['review']}"
-                    )
-        rag_context = "\n".join(rag_lines)
-        log.info("[Reviewer] RAG done -%d hits injected into prompt", len(rag_lines))
-    else:
-        log.info("[Reviewer] RAG disabled, skipping Milvus query")
+    rag_context = state.get("rag_context", "")
 
     log.info("[Reviewer] Calling LLM for review result...")
     llm = _get_llm(state)
@@ -212,14 +219,23 @@ def reporter_node(state: ReviewState) -> dict:
     return {"report": response.content}
 
 
-# Build graph
+def _route_after_reviewer(state: ReviewState) -> str:
+    """Skip Reporter when skip_reporter=True (eval mode: Reporter output unused in BERTScore)."""
+    return END if state.get("skip_reporter", False) else "reporter"
+
+
+# Build graph — fan-out: planner and rag_prefetch run in parallel from START,
+# reviewer waits for both to complete (fan-in) before executing.
 builder = StateGraph(ReviewState)
 builder.add_node("planner", planner_node)
+builder.add_node("rag_prefetch", rag_prefetch_node)
 builder.add_node("reviewer", reviewer_node)
 builder.add_node("reporter", reporter_node)
 builder.add_edge(START, "planner")
+builder.add_edge(START, "rag_prefetch")
 builder.add_edge("planner", "reviewer")
-builder.add_edge("reviewer", "reporter")
+builder.add_edge("rag_prefetch", "reviewer")
+builder.add_conditional_edges("reviewer", _route_after_reviewer, {"reporter": "reporter", END: END})
 builder.add_edge("reporter", END)
 
 graph = builder.compile()
@@ -258,7 +274,8 @@ def read_file(path):
     print("=== Multi-Agent Code Review Pipeline ===\n")
     result = graph.invoke(
         {"code": test_code, "plan": None, "review": None, "report": "",
-         "use_rag": False, "rag_collection": DEFAULT_COLLECTION, "model": "deepseek-flash"}
+         "use_rag": False, "rag_context": "", "rag_collection": DEFAULT_COLLECTION,
+         "model": "deepseek-flash", "skip_reporter": False}
     )
 
     print("[Planner Output]")
